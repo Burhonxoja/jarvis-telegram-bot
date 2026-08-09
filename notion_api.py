@@ -2,6 +2,8 @@
 Jarvis bot uchun Notion API wrapper.
 Notion-Version: 2025-09-03 (data source asosidagi so'rovlar uchun).
 """
+from __future__ import annotations  # Python 3.9 bilan moslik uchun (str | None yozuvi)
+
 import os
 import requests
 
@@ -24,6 +26,7 @@ DS_KONTENT_REJA = "6ec4eac1-2ba4-4cca-b0f7-864e20368ea6"
 DS_BILIM_BAZASI = "3c38be56-e7be-401f-833a-f99b39174400"
 DS_LEADLAR = "98e6a8ef-edf7-4e26-b7c7-c1edbb8307dc"
 DS_KANAL_SHABLONLARI = "b95e2add-0722-4539-b358-a9cf7b08b834"
+DS_LOYIHALAR = "91ed2d9f-28d8-49c1-aa79-24ad92ab3318"
 
 
 def query_data_source(data_source_id: str, filter_obj: dict | None = None, page_size: int = 50) -> list[dict]:
@@ -57,6 +60,41 @@ def create_page(data_source_id: str, properties: dict) -> dict:
     return resp.json()
 
 
+def get_page(page_id: str) -> dict:
+    url = f"{BASE_URL}/pages/{page_id}"
+    resp = requests.get(url, headers=HEADERS, timeout=30)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def create_comment(page_id: str, text: str) -> dict:
+    """Sahifaga (masalan, bitta vazifaga) izoh/komment qo'shadi (Notion sahifa kommentariyasi)."""
+    url = f"{BASE_URL}/comments"
+    body = {
+        "parent": {"page_id": page_id},
+        "rich_text": [{"text": {"content": text}}],
+    }
+    resp = requests.post(url, headers=HEADERS, json=body, timeout=30)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def archive_page(page_id: str) -> dict:
+    """Sahifani Notion'ning arxiviga (trash) ko'chiradi — o'chirish o'rniga, kerak bo'lsa Notion'dan qaytarish mumkin."""
+    url = f"{BASE_URL}/pages/{page_id}"
+    resp = requests.patch(url, headers=HEADERS, json={"archived": True}, timeout=30)
+    resp.raise_for_status()
+    return resp.json()
+
+
+def get_comments(page_id: str) -> list[dict]:
+    """Berilgan sahifadagi (masalan, vazifadagi) barcha izohlarni qaytaradi (yaratilgan tartibda)."""
+    url = f"{BASE_URL}/comments"
+    resp = requests.get(url, headers=HEADERS, params={"block_id": page_id}, timeout=30)
+    resp.raise_for_status()
+    return resp.json().get("results", [])
+
+
 # --- Property qiymatlarini o'qishni osonlashtiruvchi yordamchi funksiyalar ---
 
 def get_title(page: dict, prop_name: str) -> str:
@@ -87,3 +125,69 @@ def get_date(page: dict, prop_name: str) -> str | None:
     prop = page.get("properties", {}).get(prop_name, {})
     d = prop.get("date")
     return d.get("start") if d else None
+
+
+def get_url(page: dict, prop_name: str) -> str | None:
+    prop = page.get("properties", {}).get(prop_name, {})
+    return prop.get("url")
+
+
+def get_number(page: dict, prop_name: str) -> float | None:
+    prop = page.get("properties", {}).get(prop_name, {})
+    return prop.get("number")
+
+
+def get_relation_ids(page: dict, prop_name: str) -> list[str]:
+    prop = page.get("properties", {}).get(prop_name, {})
+    rel = prop.get("relation", [])
+    return [r["id"] for r in rel]
+
+
+# --- Xodimlar bilan ishlash ---
+
+def find_employee_by_name(name: str) -> dict | None:
+    """Ism bo'yicha xodimni topadi (aniq moslik, keyin qisman moslik bilan qayta uradi)."""
+    results = query_data_source(
+        DS_XODIMLAR, filter_obj={"property": "Ism", "title": {"equals": name}}
+    )
+    if results:
+        return results[0]
+    results = query_data_source(
+        DS_XODIMLAR, filter_obj={"property": "Ism", "title": {"contains": name}}
+    )
+    return results[0] if results else None
+
+
+def find_employee_by_chat_id(chat_id: int) -> dict | None:
+    results = query_data_source(
+        DS_XODIMLAR, filter_obj={"property": "Telegram", "rich_text": {"equals": str(chat_id)}}
+    )
+    return results[0] if results else None
+
+
+def register_employee_chat_id(employee_page_id: str, chat_id: int) -> None:
+    update_page_property(employee_page_id, {"Telegram": {"rich_text": [{"text": {"content": str(chat_id)}}]}})
+
+
+# --- Telegram kanal xaritasi (Kontent-Reja'dagi "Kanal" nomidan haqiqiy Telegram kanaliga) ---
+# Muhit o'zgaruvchilaridan o'qiladi. Hali sozlanmagan bo'lsa, qiymat None bo'ladi va
+# botda "kanal sozlanmagan" degan xabar chiqadi.
+CHANNEL_MAP = {
+    "Telegram - Urolog Shovkat": os.environ.get("CHANNEL_UROLOG_SHOVKAT"),
+    "Telegram - ARK Hospital": os.environ.get("CHANNEL_ARK_HOSPITAL"),
+    "Telegram - 18+ Natijalar": os.environ.get("CHANNEL_18_NATIJALAR"),
+}
+
+
+def get_channel_footer(kanal: str) -> str:
+    """"📋 Kanal Shablonlari" bazasidan shu kanalning 'Post oxiri shabloni' (imzo/footer)
+    matnini oladi. Topilmasa bo'sh satr qaytaradi."""
+    try:
+        results = query_data_source(
+            DS_KANAL_SHABLONLARI, filter_obj={"property": "Kanal", "title": {"equals": kanal}}
+        )
+    except Exception:
+        return ""
+    if not results:
+        return ""
+    return get_rich_text(results[0], "Post oxiri shabloni") or ""
