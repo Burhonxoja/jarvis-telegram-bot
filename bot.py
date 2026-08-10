@@ -117,6 +117,11 @@ MOOD_MINUTE = int(os.environ.get("MOOD_MINUTE", "0"))
 SETTLEMENT_HOUR = int(os.environ.get("SETTLEMENT_HOUR", "9"))
 SETTLEMENT_MINUTE = int(os.environ.get("SETTLEMENT_MINUTE", "0"))
 
+# "Oylik (fixed)" turidagi loyihalar uchun: har oy loyihaning "Boshlanish sanasi"
+# kuni (kun raqami) kelganda, "To'lov summasi" avtomatik "Debit"ga qo'shiladi.
+LOYIHA_BILLING_HOUR = int(os.environ.get("LOYIHA_BILLING_HOUR", "9"))
+LOYIHA_BILLING_MINUTE = int(os.environ.get("LOYIHA_BILLING_MINUTE", "30"))
+
 UZ_WEEKDAYS = ["Dush", "Sesh", "Chor", "Pay", "Juma", "Shan", "Yak"]
 
 MOTIVATION_QUOTES = [
@@ -2378,6 +2383,62 @@ async def scheduled_settlement_check(context: ContextTypes.DEFAULT_TYPE) -> None
             logger.exception(f"{nomi} uchun hisob-kitob xabarini yuborishda xatolik")
 
 
+async def scheduled_loyiha_billing(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Har kuni ishlaydi: "Oylik (fixed)" turidagi Faol loyihalar orasida, "Boshlanish sanasi"ning
+    kun raqami bugunga to'g'ri kelsa, o'sha loyihaning "To'lov summasi"si avtomatik "Debit"ga
+    qo'shiladi (yangi oy uchun mijoz qarzi) va adminga xabar beriladi."""
+    if not ADMIN_CHAT_ID:
+        return
+    try:
+        loyihalar = nx.query_data_source(
+            nx.DS_LOYIHALAR, filter_obj={"property": "Holati", "select": {"equals": "Faol"}}
+        )
+    except Exception:
+        logger.exception("Oylik hisob-kitob uchun loyihalarni olishda xatolik")
+        return
+
+    today = date.today()
+
+    for page in loyihalar:
+        tolov_turi = nx.get_select(page, "To'lov turi")
+        if tolov_turi != "Oylik (fixed)":
+            continue
+        tolov_summasi = nx.get_number(page, "To'lov summasi") or 0
+        if not tolov_summasi:
+            continue
+        boshlanish = nx.get_date(page, "Boshlanish sanasi")
+        if not boshlanish:
+            continue
+        try:
+            boshlanish_kuni = date.fromisoformat(boshlanish[:10]).day
+        except ValueError:
+            continue
+        if boshlanish_kuni != today.day:
+            continue
+
+        nomi = nx.get_title(page, "Loyiha") or "?"
+        joriy_debit = nx.get_number(page, "Debit") or 0
+        yangi_debit = joriy_debit + tolov_summasi
+        try:
+            nx.update_page_property(page["id"], {"Debit": {"number": yangi_debit}})
+        except Exception:
+            logger.exception(f"{nomi} uchun oylik Debit qo'shishda xatolik")
+            continue
+
+        try:
+            await context.bot.send_message(
+                chat_id=ADMIN_CHAT_ID,
+                text=(
+                    f"🗓 *{nomi}* — oylik hisob-kitob kuni ({today.day}-sana).\n"
+                    f"💳 Debitga qo'shildi: {_format_som(tolov_summasi)} (jami Debit: {_format_som(yangi_debit)}).\n"
+                    f"Pul kelganda \"➕ Kirim qo'shish\" orqali qayd eting."
+                ),
+                parse_mode=ParseMode.MARKDOWN,
+            )
+        except Exception:
+            logger.exception(f"{nomi} uchun oylik hisob-kitob xabarini yuborishda xatolik")
+
+
 # ----------------------------------------------------------------------------
 # Tugma bosilganda (menu:..., vazifa_emp:..., vazifa_date:..., reels_proj:...,
 # comment:..., pay_emp:..., rate_change:..., rate_emp:..., approve / reject / publish / done)
@@ -2967,6 +3028,9 @@ def main() -> None:
         app.job_queue.run_daily(
             scheduled_settlement_check, time=dtime(hour=SETTLEMENT_HOUR, minute=SETTLEMENT_MINUTE)
         )
+        app.job_queue.run_daily(
+            scheduled_loyiha_billing, time=dtime(hour=LOYIHA_BILLING_HOUR, minute=LOYIHA_BILLING_MINUTE)
+        )
         app.job_queue.run_repeating(
             scheduled_auto_publish, interval=AUTO_PUBLISH_INTERVAL_MINUTES * 60, first=15
         )
@@ -2974,6 +3038,7 @@ def main() -> None:
             f"Vazifa eslatmalari: {REMINDER_HOURS}, motivatsiya: {MOTIVATION_HOUR:02d}:{MOTIVATION_MINUTE:02d}, "
             f"kayfiyat so'rovi: {MOOD_HOUR:02d}:{MOOD_MINUTE:02d}, "
             f"hisob-kitob tekshiruvi: har kuni {SETTLEMENT_HOUR:02d}:{SETTLEMENT_MINUTE:02d} (har xodimning o'z 'Hisob kuni'sida), "
+            f"loyiha oylik hisob-kitobi: har kuni {LOYIHA_BILLING_HOUR:02d}:{LOYIHA_BILLING_MINUTE:02d} (har loyihaning 'Boshlanish sanasi' kunida), "
             f"avtomatik joylash: har {AUTO_PUBLISH_INTERVAL_MINUTES} daqiqada"
         )
     else:
