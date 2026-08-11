@@ -1372,33 +1372,45 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 return
             new_loyiha["boshlanish_sanasi"] = sana.isoformat()
             new_loyiha["stage"] = "reels_video"
-            await update.message.reply_text("📹 Oylik nechta REELS VIDEO chiqishi kerak? Sonini yozing (masalan: 20):")
+            await update.message.reply_text(
+                "📹 Oylik nechta REELS VIDEO chiqishi kerak? Sonini yozing (masalan: 20).\n"
+                "Bu loyihada reels/video kuzatuvi kerak bo'lmasa — \"yo'q\" deb yozing:"
+            )
             return
 
         if stage in ("reels_video", "video_target", "post_target"):
-            try:
-                son = int(text_val.replace(" ", ""))
-            except ValueError:
-                await update.message.reply_text("Iltimos, faqat butun son yuboring:")
-                return
+            _skip_words = {"yo'q", "yoq", "yuq", "-", "skip", "kerak emas"}
+            skip = text_val.strip().lower() in _skip_words
+            son = None
+            if not skip:
+                try:
+                    son = int(text_val.replace(" ", ""))
+                except ValueError:
+                    await update.message.reply_text("Iltimos, faqat butun son yuboring, yoki kerak bo'lmasa \"yo'q\" deb yozing:")
+                    return
 
             if stage == "reels_video":
                 new_loyiha["reels_target"] = son
                 new_loyiha["stage"] = "video_target"
-                await update.message.reply_text("🎬 Oylik TARGET VIDEO sonini yozing (masalan: 10):")
+                await update.message.reply_text(
+                    "🎬 Oylik TARGET VIDEO sonini yozing (masalan: 10), yoki kerak bo'lmasa \"yo'q\":"
+                )
                 return
 
             if stage == "video_target":
                 new_loyiha["video_target"] = son
                 new_loyiha["stage"] = "post_target"
-                await update.message.reply_text("📝 Oylik TELEGRAM POST target sonini yozing (masalan: 30):")
+                await update.message.reply_text(
+                    "📝 Oylik TELEGRAM POST target sonini yozing (masalan: 30), yoki kerak bo'lmasa \"yo'q\":"
+                )
                 return
 
             # stage == "post_target"
             new_loyiha["post_target"] = son
             new_loyiha["stage"] = "kanal"
             await update.message.reply_text(
-                "📢 Bu loyiha qaysi Telegram kanaliga bog'liq? (Telegram post sonini bot shu kanal orqali avtomatik hisoblaydi)",
+                "📢 Bu loyiha qaysi Telegram kanaliga bog'liq? (Telegram post sonini bot shu kanal orqali avtomatik hisoblaydi)\n"
+                "Kanalga bog'liq bo'lmasa \"🚫 Yo'q\" tugmasini bosing.",
                 reply_markup=_new_loyiha_channel_keyboard(),
             )
             return
