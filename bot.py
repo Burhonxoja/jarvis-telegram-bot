@@ -2880,8 +2880,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             new_loyiha["stage"] = "tolov_turi"
             await query.edit_message_text(
                 "🎯 Target loyiha — reels/video/TG post/kanal so'ralmaydi.\n\n"
-                "💰 Bu qanday to'lov qiladi?",
-                reply_markup=_new_loyiha_tolov_keyboard(donaga_option=False),
+                "💰 Bu qanday to'lov qiladi? (\"Donasiga\" tanlasangiz, keyinchalik \"🎯 Target hisobot\" "
+                "orqali har bajarilgan birlik uchun avtomatik hisoblanadi)",
+                reply_markup=_new_loyiha_tolov_keyboard(),
             )
             return
 
