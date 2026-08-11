@@ -1290,6 +1290,11 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 "Xodim": {"relation": [{"id": pending_work}]},
                 "Izoh": {"rich_text": [{"text": {"content": f"{son} ta ish, admin tomonidan qo'lda kiritildi"}}]},
             })
+            try:
+                joriy_kredit = nx.get_number(employee, "Kredit") or 0
+                nx.update_page_property(pending_work, {"Kredit": {"number": joriy_kredit + qoshiladigan}})
+            except Exception:
+                logger.exception(f"{nomi} uchun qo'lda ish qo'shilganda Kreditga qo'shishda xatolik")
             await update.message.reply_text(
                 f"✅ {nomi}ga {son} ta ish uchun {_format_som(qoshiladigan)} qo'shildi.\n"
                 f"/moliya orqali yangilangan balansni ko'rishingiz mumkin."
