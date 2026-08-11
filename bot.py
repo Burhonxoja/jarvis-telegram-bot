@@ -2084,6 +2084,24 @@ async def _do_moliya(bot, chat_id) -> None:
                 f"(mijozlar bizga qarzdor, hali to'lanmagan, kirimga qo'shilmagan)"
             )
 
+        try:
+            jami_kredit = 0
+            for e in target_employees:
+                e_turi = nx.get_select(e, "Maosh turi")
+                e_kredit = nx.get_number(e, "Kredit") or 0
+                if e_turi == "Kunlik (oylik summadan)":
+                    e_kirim, _, _, _ = _moliya_period_totals(e)
+                    e_kredit += e_kirim
+                jami_kredit += e_kredit
+        except Exception:
+            logger.exception("Xodimlar Kreditini yig'ishda xatolik")
+            jami_kredit = 0
+        if jami_kredit:
+            lines.append(
+                f"💳 *Kredit (xodimlarga qarzimiz):* {_format_som(jami_kredit)} "
+                f"(xodimlar ishlagan, biz hali to'lamagan haq)"
+            )
+
         action_rows.append([InlineKeyboardButton("➕ Kirim qo'shish (loyihadan tushgan pul)", callback_data="menu:kirim")])
         lines.append(f"\n💰 *Xodimlar balansi — {month}*")
     else:
