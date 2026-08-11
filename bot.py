@@ -257,12 +257,20 @@ def _new_loyiha_channel_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup(rows)
 
 
-def _new_loyiha_tolov_keyboard() -> InlineKeyboardMarkup:
+def _new_loyiha_turi_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎬 Video/Reels donasiga", callback_data="newloyiha_tolov:video")],
-        [InlineKeyboardButton("📅 Oylik (belgilangan summa)", callback_data="newloyiha_tolov:oylik")],
-        [InlineKeyboardButton("🚫 Hozircha belgilamayman", callback_data="newloyiha_tolov:yoq")],
+        [InlineKeyboardButton("📁 Media loyiha (reels/video/post kuzatiladi)", callback_data="newloyiha_turi:media")],
+        [InlineKeyboardButton("🎯 Target loyiha (faqat to'lov, kuzatuv yo'q)", callback_data="newloyiha_turi:target")],
     ])
+
+
+def _new_loyiha_tolov_keyboard(donaga_option: bool = True) -> InlineKeyboardMarkup:
+    rows = []
+    if donaga_option:
+        rows.append([InlineKeyboardButton("🎬 Video/Reels donasiga", callback_data="newloyiha_tolov:video")])
+    rows.append([InlineKeyboardButton("📅 Oylik (belgilangan summa)", callback_data="newloyiha_tolov:oylik")])
+    rows.append([InlineKeyboardButton("🚫 Hozircha belgilamayman", callback_data="newloyiha_tolov:yoq")])
+    return InlineKeyboardMarkup(rows)
 
 
 def _date_picker_keyboard() -> InlineKeyboardMarkup:
@@ -585,7 +593,8 @@ async def scheduled_reels_prompt(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.exception("Avtomatik reels so'rovini yuborishda xatolik")
 
 
-_AUTO_PUBLISH_NOTIFIED_FAILURES: set[str] = set()  # xatolik bo'yicha adminga bir marta xabar berilgan post ID'lari
+
+_AUTO_PUBLISH_XATO_MARKER = "⚠️AUTO-XATOLIK"
 
 
 async def scheduled_auto_publish(context: ContextTypes.DEFAULT_TYPE) -> None:
@@ -593,7 +602,9 @@ async def scheduled_auto_publish(context: ContextTypes.DEFAULT_TYPE) -> None:
     postlar orasidan Sana+Vaqt'i kelib yetganlarini avtomatik ravishda haqiqiy kanalga
     joylaydi — admin qo'lda "/joylash" bosishi shart emas. Muvaffaqiyatli joylashda har
     safar adminga xabar boradi; xatolikda esa har bir post uchun FAQAT BIR MARTA xabar
-    beriladi (muammo tuzatilib, joylash muvaffaqiyatli bo'lgunicha qayta-qayta yuborilmaydi)."""
+    beriladi (muammo tuzatilib, joylash muvaffaqiyatli bo'lgunicha qayta-qayta yuborilmaydi).
+    Bu holat postning Notion "Izoh" maydonida saqlanadi (bot QAYTA ISHGA TUSHIRILSA — masalan
+    yangi deploy'dan keyin — HAM eski xatoliklar qayta-qayta xabar qilinmaydi)."""
     try:
         postlar = nx.query_data_source(
             nx.DS_KONTENT_REJA, filter_obj={"property": "Status", "select": {"equals": "Tasdiqlandi"}}
@@ -619,16 +630,29 @@ async def scheduled_auto_publish(context: ContextTypes.DEFAULT_TYPE) -> None:
         if rejalashtirilgan > now:
             continue  # vaqti hali kelmagan
 
+        mavjud_izoh = nx.get_rich_text(p, "Izoh") or ""
+        allaqachon_xabar_berilgan = _AUTO_PUBLISH_XATO_MARKER in mavjud_izoh
+
         ok, xabar = await _publish_kontent_post(context.bot, p["id"])
 
+        should_notify = True
         if ok:
-            _AUTO_PUBLISH_NOTIFIED_FAILURES.discard(p["id"])
-        elif p["id"] in _AUTO_PUBLISH_NOTIFIED_FAILURES:
-            continue  # bu post uchun xatolik haqida allaqachon xabar berilgan, qayta yubormaymiz
+            if allaqachon_xabar_berilgan:
+                try:
+                    tozalangan = mavjud_izoh.replace(_AUTO_PUBLISH_XATO_MARKER, "").strip()
+                    nx.update_page_property(p["id"], {"Izoh": {"rich_text": [{"text": {"content": tozalangan}}]}})
+                except Exception:
+                    logger.exception("Muvaffaqiyatdan keyin Izohni tozalashda xatolik")
+        elif allaqachon_xabar_berilgan:
+            should_notify = False  # bu post uchun xatolik haqida allaqachon (Notion'da) xabar berilgan
         else:
-            _AUTO_PUBLISH_NOTIFIED_FAILURES.add(p["id"])
+            try:
+                yangi_izoh = f"{mavjud_izoh}\n\n{_AUTO_PUBLISH_XATO_MARKER}".strip() if mavjud_izoh else _AUTO_PUBLISH_XATO_MARKER
+                nx.update_page_property(p["id"], {"Izoh": {"rich_text": [{"text": {"content": yangi_izoh}}]}})
+            except Exception:
+                logger.exception("Izohga xatolik belgisini yozishda xatolik")
 
-        if ADMIN_CHAT_ID:
+        if should_notify and ADMIN_CHAT_ID:
             try:
                 await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=f"⏱ Avtomatik joylash: {xabar}")
             except Exception:
@@ -1376,11 +1400,19 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 )
                 return
             new_loyiha["boshlanish_sanasi"] = sana.isoformat()
-            new_loyiha["stage"] = "reels_video"
+            new_loyiha["stage"] = "loyiha_turi"
             await update.message.reply_text(
-                "📹 Oylik nechta REELS VIDEO chiqishi kerak? Sonini yozing (masalan: 20).\n"
-                "Bu loyihada reels/video kuzatuvi kerak bo'lmasa — \"yo'q\" deb yozing:"
+                "📁 Bu qanday loyiha?\n\n"
+                "📁 *Media loyiha* — mijoz uchun reels/video/TG post ishlab chiqarilib, soni kuzatiladi "
+                "(masalan ARK Hospital, Shovkat aka).\n"
+                "🎯 *Target loyiha* — shaxsiy target, reels/video/TG post kuzatuvi kerak emas, faqat to'lov.",
+                parse_mode=ParseMode.MARKDOWN,
+                reply_markup=_new_loyiha_turi_keyboard(),
             )
+            return
+
+        if stage == "loyiha_turi":
+            await update.message.reply_text("Iltimos, yuqoridagi tugmalardan loyiha turini tanlang.")
             return
 
         if stage in ("reels_video", "video_target", "post_target"):
@@ -2284,11 +2316,11 @@ async def _finalize_new_loyiha(bot, chat_id, new_loyiha: dict) -> None:
     properties = {
         "Loyiha": {"title": [{"text": {"content": new_loyiha["nomi"]}}]},
         "Oy": {"rich_text": [{"text": {"content": _current_month_str()}}]},
-        "Reels target": {"number": new_loyiha["reels_target"]},
+        "Reels target": {"number": new_loyiha.get("reels_target")},
         "Reels bajarildi": {"number": 0},
-        "Target video soni": {"number": new_loyiha["video_target"]},
+        "Target video soni": {"number": new_loyiha.get("video_target")},
         "Target video bajarildi": {"number": 0},
-        "Telegram post target": {"number": new_loyiha["post_target"]},
+        "Telegram post target": {"number": new_loyiha.get("post_target")},
         "Obunachi target": {"number": 0},
         "Obunachi hozirgi": {"number": 0},
         "Holati": {"select": {"name": "Faol"}},
@@ -2835,6 +2867,31 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         context.user_data["pending_income_project_id"] = project_id
         context.user_data["pending_income_project_name"] = nomi
         await query.edit_message_text(f"✏️ {nomi} uchun tushgan summani raqam bilan yozing (masalan: 2000000):")
+        return
+
+    if action == "newloyiha_turi":
+        new_loyiha = context.user_data.get("new_loyiha")
+        if not new_loyiha or new_loyiha.get("stage") != "loyiha_turi":
+            await query.edit_message_text("⚠️ Sessiya eskirgan. /yangiloyiha deb qaytadan boshlang.")
+            return
+
+        if payload == "target":
+            new_loyiha["loyiha_turi"] = "target"
+            new_loyiha["stage"] = "tolov_turi"
+            await query.edit_message_text(
+                "🎯 Target loyiha — reels/video/TG post/kanal so'ralmaydi.\n\n"
+                "💰 Bu qanday to'lov qiladi?",
+                reply_markup=_new_loyiha_tolov_keyboard(donaga_option=False),
+            )
+            return
+
+        # payload == "media"
+        new_loyiha["loyiha_turi"] = "media"
+        new_loyiha["stage"] = "reels_video"
+        await query.edit_message_text(
+            "📹 Oylik nechta REELS VIDEO chiqishi kerak? Sonini yozing (masalan: 20).\n"
+            "Bu loyihada reels/video kuzatuvi kerak bo'lmasa — \"yo'q\" deb yozing:"
+        )
         return
 
     if action == "newloyiha_kanal":
