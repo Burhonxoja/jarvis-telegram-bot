@@ -1121,9 +1121,11 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             yangi = joriy + qoshimcha
             nx.update_page_property(pending_target_video, {"Target video bajarildi": {"number": yangi}})
             nomi = nx.get_title(page, "Loyiha") or "loyiha"
-            qoshimcha_xabar = _auto_income_for_units(page, nomi, qoshimcha, "video")
+            proj_turi = nx.get_select(page, "Loyiha turi") or "Media"
+            birlik_soz = "target" if proj_turi == "Target" else "video"
+            qoshimcha_xabar = _auto_income_for_units(page, nomi, qoshimcha, birlik_soz)
             await update.message.reply_text(
-                f"✅ {nomi}: +{qoshimcha} video qo'shildi (jami: {int(yangi)}).{qoshimcha_xabar}"
+                f"✅ {nomi}: +{qoshimcha} {birlik_soz} qo'shildi (jami: {int(yangi)}).{qoshimcha_xabar}"
             )
         except Exception:
             logger.exception("Target video sonini yangilashda xatolik")
@@ -1932,9 +1934,10 @@ async def _do_target_hisobot_menu(bot, chat_id) -> None:
     )
 
 
-def _target_metric_keyboard(project_id: str) -> InlineKeyboardMarkup:
+def _target_metric_keyboard(project_id: str, loyiha_turi: str = "Media") -> InlineKeyboardMarkup:
+    video_label = "🎯 Target qo'shish" if loyiha_turi == "Target" else "🎞 Video qo'shish"
     return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎞 Video qo'shish", callback_data=f"target_video:{project_id}")],
+        [InlineKeyboardButton(video_label, callback_data=f"target_video:{project_id}")],
         [InlineKeyboardButton("👥 Obunachi sonini yangilash", callback_data=f"target_obuna:{project_id}")],
     ])
 
@@ -2325,6 +2328,7 @@ async def _finalize_new_loyiha(bot, chat_id, new_loyiha: dict) -> None:
         "Obunachi hozirgi": {"number": 0},
         "Holati": {"select": {"name": "Faol"}},
         "Boshlanish sanasi": {"date": {"start": new_loyiha.get("boshlanish_sanasi") or date.today().isoformat()}},
+        "Loyiha turi": {"select": {"name": "Target" if new_loyiha.get("loyiha_turi") == "target" else "Media"}},
     }
     kanal = new_loyiha.get("kanal")
     if kanal:
@@ -2685,11 +2689,14 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             proj = nx.get_page(project_id)
             nomi = nx.get_title(proj, "Loyiha") or "loyiha"
+            proj_turi = nx.get_select(proj, "Loyiha turi") or "Media"
         except Exception:
             logger.exception("Loyihani olishda xatolik (target hisobot)")
             await query.edit_message_text("⚠️ Loyihani topib bo'lmadi.")
             return
-        await query.edit_message_text(f"🎯 {nomi} — nimani yangilaysiz?", reply_markup=_target_metric_keyboard(project_id))
+        await query.edit_message_text(
+            f"🎯 {nomi} — nimani yangilaysiz?", reply_markup=_target_metric_keyboard(project_id, proj_turi)
+        )
         return
 
     if action == "target_video":
@@ -2697,12 +2704,16 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             proj = nx.get_page(project_id)
             nomi = nx.get_title(proj, "Loyiha") or "loyiha"
+            proj_turi = nx.get_select(proj, "Loyiha turi") or "Media"
         except Exception:
             logger.exception("Loyihani olishda xatolik (target video)")
             await query.edit_message_text("⚠️ Loyihani topib bo'lmadi.")
             return
         context.user_data["pending_target_video_project_id"] = project_id
-        await query.edit_message_text(f"✏️ {nomi} uchun bugun nechta yangi video joylanganini raqam bilan yozing:")
+        if proj_turi == "Target":
+            await query.edit_message_text(f"✏️ {nomi} uchun bugun nechta target bajarilganini/yoqilganini raqam bilan yozing:")
+        else:
+            await query.edit_message_text(f"✏️ {nomi} uchun bugun nechta yangi video joylanganini raqam bilan yozing:")
         return
 
     if action == "target_obuna":
@@ -2932,7 +2943,10 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         if payload == "video":
             new_loyiha["tolov_turi"] = "Video/Reels boshiga"
             new_loyiha["stage"] = "tolov_summasi"
-            await query.edit_message_text("✏️ Bitta reels/video uchun necha so'm? Raqam bilan yozing (masalan: 150000):")
+            if new_loyiha.get("loyiha_turi") == "target":
+                await query.edit_message_text("✏️ 1 ta target uchun necha so'm? Raqam bilan yozing (masalan: 150000):")
+            else:
+                await query.edit_message_text("✏️ Bitta reels/video uchun necha so'm? Raqam bilan yozing (masalan: 150000):")
             return
 
         if payload == "oylik":
