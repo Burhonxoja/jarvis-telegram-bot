@@ -155,6 +155,25 @@ def _is_authorized(chat_id: int) -> bool:
     return chat_id in AUTHORIZED_IDS
 
 
+def _sender_display_name(chat_id: int, tg_user=None, fallback: str = "Xodim") -> str:
+    """Xabar/izoh/vazifa-bajarildi/kayfiyat kabi holatlarda ADMIN'ga kimdan kelganini
+    ko'rsatish uchun ism aniqlaydi. Avval Notion'dagi ro'yxatdan o'tgan xodim nomini
+    ("Ism" propertysi) ishlatadi — bu Telegram profil ismidan ko'ra ishonchliroq (ba'zi
+    xodimlarning Telegram ismi taxallus/bo'sh bo'lishi mumkin). Topilmasa Telegram
+    profil ismiga, undan ham keyin fallback qiymatiga tushadi."""
+    try:
+        employee = nx.find_employee_by_chat_id(chat_id)
+        if employee:
+            ism = nx.get_title(employee, "Ism")
+            if ism:
+                return ism
+    except Exception:
+        logger.exception("Xodim nomini Notion'dan aniqlashda xatolik")
+    if tg_user and getattr(tg_user, "first_name", None):
+        return tg_user.first_name
+    return fallback
+
+
 def require_auth(func):
     """Faqat AUTHORIZED_IDS ro'yxatidagi foydalanuvchilarga buyruqni bajarishga ruxsat beradi."""
 
@@ -993,7 +1012,7 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             return
 
         user = update.effective_user
-        uname = user.first_name if user else "Xodim"
+        uname = _sender_display_name(chat_id, user)
 
         try:
             nx.create_comment(pending_comment, f"Izoh ({uname}): {text_val}")
@@ -1172,7 +1191,17 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 "Xodim": {"relation": [{"id": pending_payment}]},
                 "Izoh": {"rich_text": [{"text": {"content": "Admin orqali qayd etilgan to'lov"}}]},
             })
-            await update.message.reply_text(f"✅ {nomi}ga {_format_som(summa)} to'lov qayd etildi.")
+            try:
+                joriy_kredit = nx.get_number(employee, "Kredit") or 0
+                yangi_kredit = max(joriy_kredit - summa, 0)
+                nx.update_page_property(pending_payment, {"Kredit": {"number": yangi_kredit}})
+            except Exception:
+                logger.exception(f"{nomi} uchun to'lovdan keyin Kreditni yangilashda xatolik")
+                yangi_kredit = None
+            xabar = f"✅ {nomi}ga {_format_som(summa)} to'lov qayd etildi."
+            if yangi_kredit is not None:
+                xabar += f"\n💳 Qolgan Kredit: {_format_som(yangi_kredit)}"
+            await update.message.reply_text(xabar)
             chat_id_str = nx.get_rich_text(employee, "Telegram")
             if chat_id_str:
                 try:
@@ -1207,7 +1236,17 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 "Xodim": {"relation": [{"id": pending_advance}]},
                 "Izoh": {"rich_text": [{"text": {"content": "Avans (admin orqali)"}}]},
             })
-            await update.message.reply_text(f"✅ {nomi}ga {_format_som(summa)} avans qayd etildi.")
+            try:
+                joriy_kredit = nx.get_number(employee, "Kredit") or 0
+                yangi_kredit = max(joriy_kredit - summa, 0)
+                nx.update_page_property(pending_advance, {"Kredit": {"number": yangi_kredit}})
+            except Exception:
+                logger.exception(f"{nomi} uchun avansdan keyin Kreditni yangilashda xatolik")
+                yangi_kredit = None
+            xabar = f"✅ {nomi}ga {_format_som(summa)} avans qayd etildi."
+            if yangi_kredit is not None:
+                xabar += f"\n💳 Qolgan Kredit: {_format_som(yangi_kredit)}"
+            await update.message.reply_text(xabar)
             chat_id_str = nx.get_rich_text(employee, "Telegram")
             if chat_id_str:
                 try:
@@ -1417,6 +1456,15 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 # /kontent (tasdiqlash), /joylash (kanalga chiqarish)
 # ----------------------------------------------------------------------------
 
+def _normalize_br(text: str) -> str:
+    """Notion'da rich-text ichida ba'zan literal "<br>"/"<br/>"/"<br />" belgilari qoladi
+    (HTML emas, oddiy matn sifatida). Kanalga joylashdan oldin ularni haqiqiy qator
+    ko'chirishga ("\\n") aylantiradi, aks holda Telegram xabarida "<br>" so'zi ko'rinib qoladi."""
+    if not text:
+        return text
+    return re.sub(r"<br\s*/?>", "\n", text, flags=re.IGNORECASE)
+
+
 def _build_publish_message(hook: str, body: str, footer: str, max_len: int | None = None) -> str:
     """Kanalga joylanadigan xabarni yig'adi: Hook va footer (imzo) QALIN (bold), tana esa
     oddiy matn sifatida. Telegram HTML parse_mode uchun xavfsiz (escape qilingan) natija
@@ -1459,8 +1507,8 @@ async def _publish_kontent_post(bot, page_id: str) -> tuple[bool, str]:
         nomi = nx.get_title(page, "Post nomi") or "Post"
         kanal = nx.get_select(page, "Kanal") or "?"
         channel_target = nx.CHANNEL_MAP.get(kanal)
-        hook = nx.get_rich_text(page, "Hook")
-        matn = nx.get_rich_text(page, "Ssenariy/Matn")
+        hook = _normalize_br(nx.get_rich_text(page, "Hook"))
+        matn = _normalize_br(nx.get_rich_text(page, "Ssenariy/Matn"))
         rasm_url = nx.get_url(page, "Rasm/Video havolasi")
 
         if not channel_target:
@@ -1470,12 +1518,20 @@ async def _publish_kontent_post(bot, page_id: str) -> tuple[bool, str]:
         # ARK Hospital'ning "@ark_hospitalll..." qatori). Uni "Kanal Shablonlari"dagi asl
         # shablon bilan solishtirib, matn tanasidan ajratib olamiz — shunda faqat o'sha
         # qismini QALIN qilib qayta biriktirish mumkin bo'ladi.
-        footer_shabloni = nx.get_channel_footer(kanal)
+        footer_shabloni = _normalize_br(nx.get_channel_footer(kanal))
         body = matn
         footer = ""
         if footer_shabloni and matn.rstrip().endswith(footer_shabloni.rstrip()):
             footer = footer_shabloni.rstrip()
             body = matn.rstrip()[: -len(footer)].rstrip()
+        else:
+            # Shablon aniq mos kelmasa ham (masalan telefon raqami/bo'shliqda kichik farq),
+            # oxirgi paragraf (bo'sh qatordan keyingi so'nggi qism) har doim QALIN qilib
+            # yuborilsin — bu odatda kanal imzosi/manzili bo'ladi.
+            qismlar = re.split(r"\n\s*\n", matn.rstrip())
+            if len(qismlar) > 1:
+                footer = qismlar[-1].strip()
+                body = "\n\n".join(qismlar[:-1]).rstrip()
 
         # Rasm manbasi: avval lokal (Gemini orqali yasalgan) rasm, bo'lmasa Notion'dagi URL.
         lokal_rasm = _local_image_path(page_id) if _has_local_image(page_id) else None
@@ -2026,18 +2082,23 @@ async def _do_moliya(bot, chat_id) -> None:
         nomi = nx.get_title(e, "Ism") or "?"
         turi = nx.get_select(e, "Maosh turi")
         kirim, chiqim, davr_boshi, davr_oxiri = _moliya_period_totals(e)
-        balans = kirim - chiqim
         davr = f"{davr_boshi.strftime('%d.%m')} – {davr_oxiri.strftime('%d.%m')}"
+        # "Kredit" — to'lanmagan, davrlar osha jamg'arilib boruvchi umumiy qarz. To'lovlar
+        # allaqachon Kreditdan ayirilgan bo'ladi (to'lov qilingan zahoti), shuning uchun bu
+        # yerda "chiqim"ni yana ayirish shart emas — faqat "Kunlik" turi uchun hali
+        # bankvordan o'tmagan joriy davr jamg'armasi ustiga qo'shiladi (real vaqtli ko'rinish).
+        kredit_hozir = nx.get_number(e, "Kredit") or 0
+        balans = kredit_hozir + kirim if turi == "Kunlik (oylik summadan)" else kredit_hozir
         qoshimcha = ""
         if turi == "Vazifa boshiga":
             summa = nx.get_number(e, "Maosh summasi") or 0
             maqsad = nx.get_number(e, "Maosh maqsad soni") or 0
             if summa and maqsad:
                 bajarilgan = round(kirim / (summa / maqsad))
-                qoshimcha = f", {bajarilgan:g}/{maqsad:g} ish"
+                qoshimcha = f", {bajarilgan:g}/{maqsad:g} ish (bu davr)"
         lines.append(
             f"👤 *{nomi}*: {_format_som(balans)}\n"
-            f"   (jamg'arilgan: {_format_som(kirim)}, to'langan: {_format_som(chiqim)}, davr: {davr}{qoshimcha})"
+            f"   (💳 Kredit: {_format_som(kredit_hozir)}, joriy davr ({davr}) jamg'armasi: {_format_som(kirim)}{qoshimcha})"
         )
         if is_admin_view:
             pay_rows.append([
@@ -2303,6 +2364,15 @@ def _accrue_task_payment(task_page: dict) -> None:
             })
         except Exception:
             logger.exception(f"{nomi} uchun vazifa haqini yozishda xatolik")
+            continue
+
+        # Ishlagan haqi to'lanmaguncha "Kredit" (biznesning xodimga qarzi) sifatida
+        # jamg'arilib boradi — davr (Hisob kuni) o'zgarganda YO'QOLIB QOLMASIN.
+        try:
+            joriy_kredit = nx.get_number(employee, "Kredit") or 0
+            nx.update_page_property(emp_id, {"Kredit": {"number": joriy_kredit + per_task}})
+        except Exception:
+            logger.exception(f"{nomi} uchun Kreditga qo'shishda xatolik")
 
 
 # Eslatma: avval "Kunlik (oylik summadan)" turidagi xodimlarga har kuni tunda (00:05'da)
@@ -2354,8 +2424,26 @@ async def scheduled_settlement_check(context: ContextTypes.DEFAULT_TYPE) -> None
         nomi = nx.get_title(e, "Ism") or "?"
         summa = nx.get_number(e, "Maosh summasi") or 0
         kirim, chiqim, davr_boshi, davr_oxiri = _moliya_period_totals(e, today)
-        balans = kirim - chiqim
         davr = f"{davr_boshi.strftime('%d.%m')} – {davr_oxiri.strftime('%d.%m')}"
+
+        # "Kunlik (oylik summadan)" turida davr ichidagi jamg'arilgan summa Moliya'ga
+        # alohida qator sifatida yozilmaydi (real vaqtda hisoblanadi) — shu sabab, agar
+        # to'lanmasa, davr almashganda yo'qolib qolardi. Shu yerda uni doimiy "Kredit"ga
+        # qo'shib qo'yamiz, shunda to'lanmaguncha hisobda qolaveradi. ("Vazifa boshiga"
+        # turi buni allaqachon _accrue_task_payment orqali har bir bajarilgan ishda oladi.)
+        if turi == "Kunlik (oylik summadan)" and kirim:
+            try:
+                joriy_kredit = nx.get_number(e, "Kredit") or 0
+                nx.update_page_property(e["id"], {"Kredit": {"number": joriy_kredit + kirim}})
+            except Exception:
+                logger.exception(f"{nomi} uchun davr yakunida Kreditga qo'shishda xatolik")
+
+        try:
+            yangilangan_emp = nx.get_page(e["id"])
+            umumiy_kredit = nx.get_number(yangilangan_emp, "Kredit") or 0
+        except Exception:
+            logger.exception(f"{nomi} uchun yangilangan Kreditni olishda xatolik")
+            umumiy_kredit = kirim - chiqim
 
         lines = [f"🗓 Bugun *{nomi}* uchun hisob-kitob kuni ({int(hisob_kuni)}-sana).\n"]
         if turi == "Vazifa boshiga":
@@ -2363,8 +2451,8 @@ async def scheduled_settlement_check(context: ContextTypes.DEFAULT_TYPE) -> None
             lines.append(f"Joriy stavka: {_format_som(summa)} / {maqsad:g} ish")
         else:
             lines.append(f"Joriy stavka: {_format_som(summa)} / oy")
-        lines.append(f"\nDavr ({davr}) balansi: {_format_som(balans)}")
-        lines.append(f"(jamg'arilgan: {_format_som(kirim)}, to'langan: {_format_som(chiqim)})")
+        lines.append(f"\n💳 Jami Kredit (to'lanmagan, jamg'arilgan): {_format_som(umumiy_kredit)}")
+        lines.append(f"(bu davr — {davr} — bo'yicha jamg'arilgan: {_format_som(kirim)}, to'langan: {_format_som(chiqim)})")
 
         keyboard = InlineKeyboardMarkup([
             [
@@ -2849,8 +2937,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         label = mood_labels.get(payload, payload)
         await query.edit_message_text(f"Bugungi kayfiyatingiz: {label}\nRahmat! 🙏")
         if ADMIN_CHAT_ID and str(chat_id) != str(ADMIN_CHAT_ID):
-            user = update.effective_user
-            uname = user.first_name if user else "Foydalanuvchi"
+            uname = _sender_display_name(chat_id, update.effective_user, fallback="Foydalanuvchi")
             try:
                 await context.bot.send_message(
                     chat_id=ADMIN_CHAT_ID,
@@ -2918,7 +3005,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 logger.exception("Vazifa haqini hisoblashda xatolik")
 
             if ADMIN_CHAT_ID:
-                bajaruvchi = update.effective_user.first_name or "Xodim"
+                bajaruvchi = _sender_display_name(chat_id, update.effective_user)
                 await context.bot.send_message(
                     chat_id=ADMIN_CHAT_ID,
                     text=f"✅ {bajaruvchi} vazifani bajardi: {vazifa_nomi}",
