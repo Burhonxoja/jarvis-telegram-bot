@@ -109,8 +109,8 @@ REMINDER_HOURS = [int(x.strip()) for x in os.environ.get("REMINDER_HOURS", "9,11
 MOTIVATION_HOUR = int(os.environ.get("MOTIVATION_HOUR", "8"))
 MOTIVATION_MINUTE = int(os.environ.get("MOTIVATION_MINUTE", "0"))
 
-MOOD_HOUR = int(os.environ.get("MOOD_HOUR", "21"))
-MOOD_MINUTE = int(os.environ.get("MOOD_MINUTE", "0"))
+MOOD_HOUR = int(os.environ.get("MOOD_HOUR", "19"))
+MOOD_MINUTE = int(os.environ.get("MOOD_MINUTE", "30"))
 
 # Har bir xodimning o'z "Hisob kuni" (oyning qaysi sanasida hisob-kitob qilinishi) bor —
 # shu kuni SETTLEMENT_HOUR'da adminga o'sha xodim bo'yicha balans + amallar (to'lov/avans/stavka) yuboriladi.
@@ -121,6 +121,24 @@ SETTLEMENT_MINUTE = int(os.environ.get("SETTLEMENT_MINUTE", "0"))
 # kuni (kun raqami) kelganda, "To'lov summasi" avtomatik "Debit"ga qo'shiladi.
 LOYIHA_BILLING_HOUR = int(os.environ.get("LOYIHA_BILLING_HOUR", "9"))
 LOYIHA_BILLING_MINUTE = int(os.environ.get("LOYIHA_BILLING_MINUTE", "30"))
+
+# "Tungi tinchlik" — shu vaqt oralig'ida (standart 20:00–07:00) xodimlarga HECH QANDAY
+# avtomatik xabar (eslatma, motivatsiya, kayfiyat so'rovi, yangi vazifa bildirishnomasi)
+# yuborilmaydi. Shu oraliqda tayinlangan yangi vazifa xabari QUIET_HOURS_END'da yuboriladi.
+QUIET_HOURS_START = int(os.environ.get("QUIET_HOURS_START", "20"))
+QUIET_HOURS_END = int(os.environ.get("QUIET_HOURS_END", "7"))
+
+
+def _is_quiet_hours(now: "datetime | None" = None) -> bool:
+    now = now or datetime.now()
+    hour = now.hour
+    if QUIET_HOURS_START == QUIET_HOURS_END:
+        return False
+    if QUIET_HOURS_START < QUIET_HOURS_END:
+        return QUIET_HOURS_START <= hour < QUIET_HOURS_END
+    # Kechadan tongga o'tuvchi oraliq (masalan 20 -> 7)
+    return hour >= QUIET_HOURS_START or hour < QUIET_HOURS_END
+
 
 UZ_WEEKDAYS = ["Dush", "Sesh", "Chor", "Pay", "Juma", "Shan", "Yak"]
 
@@ -665,6 +683,8 @@ async def scheduled_auto_publish(context: ContextTypes.DEFAULT_TYPE) -> None:
 
 async def scheduled_task_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Kimda ochiq (Muddat <= bugun, Holati != Done) vazifa bo'lsa, o'sha odamga eslatma yuboradi."""
+    if _is_quiet_hours():
+        return
     try:
         employees = nx.query_data_source(nx.DS_XODIMLAR)
     except Exception:
@@ -709,8 +729,65 @@ async def scheduled_task_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
             logger.exception(f"{nomi}ga eslatma yuborilmadi")
 
 
+async def scheduled_morning_task_notify(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Har kuni QUIET_HOURS_END'da (standart 07:00) ishlaydi: tungi tinchlik vaqtida
+    (QUIET_HOURS_START–QUIET_HOURS_END) tayinlangani uchun xabari kechiktirilgan ("Xabar
+    berildi" belgisiz) vazifalarni topib, endi xodimga yuboradi va belgilaydi."""
+    try:
+        tasks = nx.query_data_source(
+            nx.DS_VAZIFALAR,
+            filter_obj={
+                "and": [
+                    {"property": "Xabar berildi", "checkbox": {"equals": False}},
+                    {"property": "Holati", "status": {"does_not_equal": "Done"}},
+                ]
+            },
+        )
+    except Exception:
+        logger.exception("Ertalabki vazifa navbatini olishda xatolik")
+        return
+
+    for t in tasks:
+        emp_ids = nx.get_relation_ids(t, "Mas'ul")
+        if not emp_ids:
+            continue
+        vazifa_nomi = nx.get_title(t, "Vazifa") or "?"
+        muddat = nx.get_date(t, "Muddat")
+        muddat_str = date.fromisoformat(muddat[:10]).strftime("%d.%m.%Y") if muddat else "belgilanmagan"
+
+        for emp_id in emp_ids:
+            try:
+                employee = nx.get_page(emp_id)
+            except Exception:
+                logger.exception("Ertalabki navbat uchun xodimni olishda xatolik")
+                continue
+            chat_id_str = nx.get_rich_text(employee, "Telegram")
+            if not chat_id_str:
+                continue
+            keyboard = InlineKeyboardMarkup([[
+                InlineKeyboardButton("✅ Bajardim", callback_data=f"done:{t['id']}"),
+                InlineKeyboardButton("💬 Izoh", callback_data=f"comment:{t['id']}"),
+            ]])
+            try:
+                await context.bot.send_message(
+                    chat_id=int(chat_id_str),
+                    text=f"📋 Sizga yangi vazifa berildi (muddat: {muddat_str}):\n\n{vazifa_nomi}",
+                    reply_markup=keyboard,
+                )
+            except TelegramError:
+                logger.exception("Ertalabki vazifa xabarini yuborishda xatolik")
+                continue
+
+        try:
+            nx.update_page_property(t["id"], {"Xabar berildi": {"checkbox": True}})
+        except Exception:
+            logger.exception("'Xabar berildi' belgisini yangilashda xatolik")
+
+
 async def scheduled_motivation(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Har tongda hammaga tasodifiy motivatsion gap yuboradi."""
+    if _is_quiet_hours():
+        return
     text = random.choice(MOTIVATION_QUOTES)
     for chat_id in AUTHORIZED_IDS:
         try:
@@ -729,6 +806,8 @@ def _mood_keyboard() -> InlineKeyboardMarkup:
 
 async def scheduled_mood_checkin(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Har kuni kechqurun hammadan kunining qanday o'tganini so'raydi (3 ta tugma: yomon/o'rta/zo'r)."""
+    if _is_quiet_hours():
+        return
     for chat_id in AUTHORIZED_IDS:
         try:
             await context.bot.send_message(
@@ -819,6 +898,19 @@ async def _create_vazifa(
     )
 
     if chat_id:
+        if _is_quiet_hours():
+            # Tungi tinchlik vaqti (QUIET_HOURS_START–QUIET_HOURS_END) — xodimga hozir
+            # yubormaymiz, "Xabar berildi" belgisiz qoldiramiz, ertalab QUIET_HOURS_END'da
+            # scheduled_morning_task_notify orqali avtomatik yuboriladi.
+            await bot.send_message(
+                chat_id=requester_chat_id,
+                text=(
+                    f"🌙 Hozir tungi tinchlik vaqti ({QUIET_HOURS_START:02d}:00–{QUIET_HOURS_END:02d}:00) — "
+                    f"{ism}ga xabar ertalab soat {QUIET_HOURS_END:02d}:00da avtomatik boradi."
+                ),
+            )
+            return
+
         keyboard = InlineKeyboardMarkup([[
             InlineKeyboardButton("✅ Bajardim", callback_data=f"done:{new_page['id']}"),
             InlineKeyboardButton("💬 Izoh", callback_data=f"comment:{new_page['id']}"),
@@ -829,6 +921,7 @@ async def _create_vazifa(
                 text=f"📋 Sizga yangi vazifa berildi (muddat: {muddat_str}):\n\n{vazifa_matni}",
                 reply_markup=keyboard,
             )
+            nx.update_page_property(new_page["id"], {"Xabar berildi": {"checkbox": True}})
         except TelegramError:
             logger.exception("Xodimga xabar yuborishda xatolik")
             await bot.send_message(
@@ -3225,6 +3318,9 @@ def main() -> None:
         app.job_queue.run_daily(
             scheduled_loyiha_billing, time=dtime(hour=LOYIHA_BILLING_HOUR, minute=LOYIHA_BILLING_MINUTE)
         )
+        app.job_queue.run_daily(
+            scheduled_morning_task_notify, time=dtime(hour=QUIET_HOURS_END, minute=0)
+        )
         app.job_queue.run_repeating(
             scheduled_auto_publish, interval=AUTO_PUBLISH_INTERVAL_MINUTES * 60, first=15
         )
@@ -3233,6 +3329,7 @@ def main() -> None:
             f"kayfiyat so'rovi: {MOOD_HOUR:02d}:{MOOD_MINUTE:02d}, "
             f"hisob-kitob tekshiruvi: har kuni {SETTLEMENT_HOUR:02d}:{SETTLEMENT_MINUTE:02d} (har xodimning o'z 'Hisob kuni'sida), "
             f"loyiha oylik hisob-kitobi: har kuni {LOYIHA_BILLING_HOUR:02d}:{LOYIHA_BILLING_MINUTE:02d} (har loyihaning 'Boshlanish sanasi' kunida), "
+            f"tungi tinchlik: {QUIET_HOURS_START:02d}:00–{QUIET_HOURS_END:02d}:00 (xodimlarga avtomatik xabar yo'q), "
             f"avtomatik joylash: har {AUTO_PUBLISH_INTERVAL_MINUTES} daqiqada"
         )
     else:
