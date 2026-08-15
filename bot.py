@@ -62,6 +62,22 @@ import random
 import re
 from calendar import monthrange
 from datetime import date, datetime, timedelta, time as dtime
+from zoneinfo import ZoneInfo
+
+# Barcha rejalashtirilgan vaqtlar (eslatmalar, hisobotlar va h.k.) shu vaqt zonasida
+# hisoblanadi — server (Railway) odatda UTC'da ishlaydi, lekin biznes Toshkentda joylashgan.
+TASHKENT_TZ = ZoneInfo("Asia/Tashkent")
+
+
+def _tashkent_now() -> datetime:
+    """Joriy vaqtni Toshkent mahalliy vaqtida, lekin tzinfo'siz (naive) qaytaradi —
+    Notion'dagi Sana/Vaqt qiymatlari ham tzinfo'siz va Toshkent vaqti deb hisoblanadi,
+    shuning uchun ular bilan to'g'ridan-to'g'ri solishtirish mumkin bo'lishi kerak."""
+    return datetime.now(TASHKENT_TZ).replace(tzinfo=None)
+
+
+def _tashkent_today() -> date:
+    return _tashkent_now().date()
 
 from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
 from telegram.constants import ParseMode
@@ -130,7 +146,7 @@ QUIET_HOURS_END = int(os.environ.get("QUIET_HOURS_END", "7"))
 
 
 def _is_quiet_hours(now: "datetime | None" = None) -> bool:
-    now = now or datetime.now()
+    now = now or _tashkent_now()
     hour = now.hour
     if QUIET_HOURS_START == QUIET_HOURS_END:
         return False
@@ -294,7 +310,7 @@ def _new_loyiha_tolov_keyboard(donaga_option: bool = True) -> InlineKeyboardMark
 def _date_picker_keyboard() -> InlineKeyboardMarkup:
     """Bugun + keyingi 6 kun uchun tugmalar. Toq kunlar 🔵, juft kunlar ⚪ bilan ajratiladi."""
     rows = []
-    today = date.today()
+    today = _tashkent_today()
     for i in range(7):
         d = today + timedelta(days=i)
         marker = "🔵" if d.day % 2 == 1 else "⚪"
@@ -372,7 +388,7 @@ async def men(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ----------------------------------------------------------------------------
 
 def _fetch_daily_data():
-    today = date.today().isoformat()
+    today = _tashkent_today().isoformat()
     try:
         # "on_or_before" ishlatamiz — shunda bugungi va muddati o'tib ketgan (hali bajarilmagan)
         # vazifalar ham hisobotda ko'rinadi, faqat "aynan bugun"gilar emas.
@@ -395,7 +411,7 @@ def _fetch_daily_data():
 
 
 def _build_daily_caption(vazifalar: list, postlar: list) -> str:
-    today = date.today().strftime("%d.%m.%Y")
+    today = _tashkent_today().strftime("%d.%m.%Y")
     return (
         f"📊 *Kunlik dashboard* — {today}\n"
         f"Vazifalar: {len(vazifalar)} ta | Kontent postlari: {len(postlar)} ta"
@@ -419,7 +435,7 @@ def _compute_team_today_data() -> list:
         logger.exception("Xodimlarni olishda xatolik (jamoa dashboard)")
         return []
 
-    today = date.today().isoformat()
+    today = _tashkent_today().isoformat()
     team_data = []
     for e in employees:
         emp_id = e["id"]
@@ -478,14 +494,14 @@ async def hisobot(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 def _current_month_str() -> str:
-    return date.today().strftime("%Y-%m")
+    return _tashkent_today().strftime("%Y-%m")
 
 
 def _parse_flexible_date(text: str) -> date | None:
     """'bugun'/'hozir', 'DD.MM.YYYY' yoki 'YYYY-MM-DD' formatlarini qabul qiladi. Noto'g'ri bo'lsa None qaytaradi."""
     t = text.strip().lower()
     if t in ("bugun", "hozir", "hoziroq"):
-        return date.today()
+        return _tashkent_today()
     for fmt in ("%d.%m.%Y", "%Y-%m-%d", "%d/%m/%Y"):
         try:
             return datetime.strptime(text.strip(), fmt).date()
@@ -631,7 +647,7 @@ async def scheduled_auto_publish(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.exception("Avtomatik joylash uchun postlarni olishda xatolik")
         return
 
-    now = datetime.now()
+    now = _tashkent_now()
     for p in postlar:
         sana_str = nx.get_date(p, "Sana")
         vaqt_str = (nx.get_rich_text(p, "Vaqt") or "").strip()
@@ -691,7 +707,7 @@ async def scheduled_task_reminders(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.exception("Eslatma uchun xodimlarni olishda xatolik")
         return
 
-    today = date.today().isoformat()
+    today = _tashkent_today().isoformat()
     for e in employees:
         chat_id_str = nx.get_rich_text(e, "Telegram")
         if not chat_id_str:
@@ -867,7 +883,7 @@ def _split_vazifa_lines(text: str) -> list[str]:
 async def _create_vazifa(
     bot, requester_chat_id, employee: dict | None, ism: str, vazifa_matni: str, muddat: str | None = None
 ) -> None:
-    muddat = muddat or date.today().isoformat()
+    muddat = muddat or _tashkent_today().isoformat()
     properties = {
         "Vazifa": {"title": [{"text": {"content": vazifa_matni}}]},
         "Holati": {"status": {"name": "Not started"}},
@@ -1267,7 +1283,7 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 "Turi": {"select": {"name": "Kirim"}},
                 "Kategoriya": {"select": {"name": "Xizmat to'lovi"}},
                 "Summa": {"number": summa},
-                "Sana": {"date": {"start": date.today().isoformat()}},
+                "Sana": {"date": {"start": _tashkent_today().isoformat()}},
                 "Izoh": {"rich_text": [{"text": {"content": f"Loyiha: {proj_nomi}"}}]},
             })
 
@@ -1306,7 +1322,7 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 "Turi": {"select": {"name": "Chiqim"}},
                 "Kategoriya": {"select": {"name": "Ish haqi"}},
                 "Summa": {"number": summa},
-                "Sana": {"date": {"start": date.today().isoformat()}},
+                "Sana": {"date": {"start": _tashkent_today().isoformat()}},
                 "Xodim": {"relation": [{"id": pending_payment}]},
                 "Izoh": {"rich_text": [{"text": {"content": "Admin orqali qayd etilgan to'lov"}}]},
             })
@@ -1351,7 +1367,7 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 "Turi": {"select": {"name": "Chiqim"}},
                 "Kategoriya": {"select": {"name": "Ish haqi"}},
                 "Summa": {"number": summa},
-                "Sana": {"date": {"start": date.today().isoformat()}},
+                "Sana": {"date": {"start": _tashkent_today().isoformat()}},
                 "Xodim": {"relation": [{"id": pending_advance}]},
                 "Izoh": {"rich_text": [{"text": {"content": "Avans (admin orqali)"}}]},
             })
@@ -1405,7 +1421,7 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 "Turi": {"select": {"name": "Kirim"}},
                 "Kategoriya": {"select": {"name": "Ish haqi"}},
                 "Summa": {"number": qoshiladigan},
-                "Sana": {"date": {"start": date.today().isoformat()}},
+                "Sana": {"date": {"start": _tashkent_today().isoformat()}},
                 "Xodim": {"relation": [{"id": pending_work}]},
                 "Izoh": {"rich_text": [{"text": {"content": f"{son} ta ish, admin tomonidan qo'lda kiritildi"}}]},
             })
@@ -2082,7 +2098,7 @@ def _moliya_period_totals(employee: dict, today: date | None = None) -> tuple:
     ichida o'tgan kunlar ulushi asosida hisoblanadi (davr oxirida — hisob kunining o'zida —
     to'liq summa yig'iladi). 'Vazifa boshiga' turidagi xodimlar uchun Notion'da har bir
     bajarilgan vazifa uchun yozilgan Kirim yozuvlari shu davr ichida yig'iladi."""
-    today = today or date.today()
+    today = today or _tashkent_today()
     employee_id = employee["id"]
     turi = nx.get_select(employee, "Maosh turi")
     hisob_kuni = nx.get_number(employee, "Hisob kuni")
@@ -2420,7 +2436,7 @@ async def _finalize_new_loyiha(bot, chat_id, new_loyiha: dict) -> None:
         "Obunachi target": {"number": 0},
         "Obunachi hozirgi": {"number": 0},
         "Holati": {"select": {"name": "Faol"}},
-        "Boshlanish sanasi": {"date": {"start": new_loyiha.get("boshlanish_sanasi") or date.today().isoformat()}},
+        "Boshlanish sanasi": {"date": {"start": new_loyiha.get("boshlanish_sanasi") or _tashkent_today().isoformat()}},
         "Loyiha turi": {"select": {"name": "Target" if new_loyiha.get("loyiha_turi") == "target" else "Media"}},
     }
     kanal = new_loyiha.get("kanal")
@@ -2522,7 +2538,7 @@ def _accrue_task_payment(task_page: dict) -> None:
                 "Turi": {"select": {"name": "Kirim"}},
                 "Kategoriya": {"select": {"name": "Ish haqi"}},
                 "Summa": {"number": per_task},
-                "Sana": {"date": {"start": date.today().isoformat()}},
+                "Sana": {"date": {"start": _tashkent_today().isoformat()}},
                 "Xodim": {"relation": [{"id": emp_id}]},
                 "Izoh": {"rich_text": [{"text": {"content": vazifa_nomi}}]},
             })
@@ -2575,7 +2591,7 @@ async def scheduled_settlement_check(context: ContextTypes.DEFAULT_TYPE) -> None
         logger.exception("Hisob kuni tekshiruvi uchun xodimlarni olishda xatolik")
         return
 
-    today = date.today()
+    today = _tashkent_today()
 
     for e in employees:
         turi = nx.get_select(e, "Maosh turi")
@@ -2649,7 +2665,7 @@ async def scheduled_loyiha_billing(context: ContextTypes.DEFAULT_TYPE) -> None:
         logger.exception("Oylik hisob-kitob uchun loyihalarni olishda xatolik")
         return
 
-    today = date.today()
+    today = _tashkent_today()
 
     for page in loyihalar:
         tolov_turi = nx.get_select(page, "To'lov turi")
@@ -3293,11 +3309,11 @@ def main() -> None:
         if ADMIN_CHAT_ID:
             app.job_queue.run_daily(
                 scheduled_daily_report,
-                time=dtime(hour=REPORT_HOUR, minute=REPORT_MINUTE),
+                time=dtime(hour=REPORT_HOUR, minute=REPORT_MINUTE, tzinfo=TASHKENT_TZ),
             )
             app.job_queue.run_daily(
                 scheduled_reels_prompt,
-                time=dtime(hour=REELS_HOUR, minute=REELS_MINUTE),
+                time=dtime(hour=REELS_HOUR, minute=REELS_MINUTE, tzinfo=TASHKENT_TZ),
             )
             logger.info(
                 f"Kunlik avtomatik hisobot: {REPORT_HOUR:02d}:{REPORT_MINUTE:02d}, "
@@ -3307,19 +3323,19 @@ def main() -> None:
             logger.warning("ADMIN_CHAT_ID o'rnatilmagan — kunlik hisobot va reels so'rovi avtomatik ishlamaydi.")
 
         for h in REMINDER_HOURS:
-            app.job_queue.run_daily(scheduled_task_reminders, time=dtime(hour=h, minute=0))
+            app.job_queue.run_daily(scheduled_task_reminders, time=dtime(hour=h, minute=0, tzinfo=TASHKENT_TZ))
         app.job_queue.run_daily(
-            scheduled_motivation, time=dtime(hour=MOTIVATION_HOUR, minute=MOTIVATION_MINUTE)
+            scheduled_motivation, time=dtime(hour=MOTIVATION_HOUR, minute=MOTIVATION_MINUTE, tzinfo=TASHKENT_TZ)
         )
-        app.job_queue.run_daily(scheduled_mood_checkin, time=dtime(hour=MOOD_HOUR, minute=MOOD_MINUTE))
+        app.job_queue.run_daily(scheduled_mood_checkin, time=dtime(hour=MOOD_HOUR, minute=MOOD_MINUTE, tzinfo=TASHKENT_TZ))
         app.job_queue.run_daily(
-            scheduled_settlement_check, time=dtime(hour=SETTLEMENT_HOUR, minute=SETTLEMENT_MINUTE)
-        )
-        app.job_queue.run_daily(
-            scheduled_loyiha_billing, time=dtime(hour=LOYIHA_BILLING_HOUR, minute=LOYIHA_BILLING_MINUTE)
+            scheduled_settlement_check, time=dtime(hour=SETTLEMENT_HOUR, minute=SETTLEMENT_MINUTE, tzinfo=TASHKENT_TZ)
         )
         app.job_queue.run_daily(
-            scheduled_morning_task_notify, time=dtime(hour=QUIET_HOURS_END, minute=0)
+            scheduled_loyiha_billing, time=dtime(hour=LOYIHA_BILLING_HOUR, minute=LOYIHA_BILLING_MINUTE, tzinfo=TASHKENT_TZ)
+        )
+        app.job_queue.run_daily(
+            scheduled_morning_task_notify, time=dtime(hour=QUIET_HOURS_END, minute=0, tzinfo=TASHKENT_TZ)
         )
         app.job_queue.run_repeating(
             scheduled_auto_publish, interval=AUTO_PUBLISH_INTERVAL_MINUTES * 60, first=15
