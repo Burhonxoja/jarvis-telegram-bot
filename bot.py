@@ -2223,14 +2223,25 @@ async def _do_moliya(bot, chat_id) -> None:
             loyihalar_debit = nx.query_data_source(
                 nx.DS_LOYIHALAR, filter_obj={"property": "Holati", "select": {"does_not_equal": "Arxivlangan"}}
             )
-            jami_debit = sum(nx.get_number(l, "Debit") or 0 for l in loyihalar_debit)
+            debit_qarzdorlar = [
+                (nx.get_title(l, "Loyiha") or "?", nx.get_number(l, "Debit") or 0)
+                for l in loyihalar_debit
+                if (nx.get_number(l, "Debit") or 0) > 0
+            ]
+            jami_debit = sum(d for _, d in debit_qarzdorlar)
         except Exception:
             logger.exception("Loyihalar Debit'ini yig'ishda xatolik")
             jami_debit = 0
+            debit_qarzdorlar = []
         if jami_debit:
+            debit_qarzdorlar.sort(key=lambda x: x[1], reverse=True)
+            qarzdorlar_matni = "\n".join(
+                f"   • {nomi}: {_format_som(summa)}" for nomi, summa in debit_qarzdorlar
+            )
             lines.append(
                 f"\n💳 *Debit (mandan qarzdorlar):* {_format_som(jami_debit)} "
-                f"(mijozlar bizga qarzdor, hali to'lanmagan, kirimga qo'shilmagan)"
+                f"(mijozlar bizga qarzdor, hali to'lanmagan, kirimga qo'shilmagan)\n"
+                f"{qarzdorlar_matni}"
             )
 
         try:
