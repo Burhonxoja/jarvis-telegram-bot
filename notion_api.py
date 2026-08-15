@@ -137,6 +137,11 @@ def get_number(page: dict, prop_name: str) -> float | None:
     return prop.get("number")
 
 
+def get_checkbox(page: dict, prop_name: str) -> bool:
+    prop = page.get("properties", {}).get(prop_name, {})
+    return bool(prop.get("checkbox"))
+
+
 def get_relation_ids(page: dict, prop_name: str) -> list[str]:
     prop = page.get("properties", {}).get(prop_name, {})
     rel = prop.get("relation", [])

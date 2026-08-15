@@ -2662,10 +2662,18 @@ async def scheduled_settlement_check(context: ContextTypes.DEFAULT_TYPE) -> None
             logger.exception(f"{nomi} uchun hisob-kitob xabarini yuborishda xatolik")
 
 
+# Bo'lib to'lanadigan loyihalarda (checkbox yoqilgan) ikkinchi 50% birinchi to'lov kunidan
+# necha kun keyin hisoblanishi (masalan 21-sana + 5 kun = 26-sana).
+SPLIT_BILLING_GAP_DAYS = int(os.environ.get("SPLIT_BILLING_GAP_DAYS", "5"))
+
+
 async def scheduled_loyiha_billing(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Har kuni ishlaydi: "Oylik (fixed)" turidagi Faol loyihalar orasida, "Boshlanish sanasi"ning
     kun raqami bugunga to'g'ri kelsa, o'sha loyihaning "To'lov summasi"si avtomatik "Debit"ga
-    qo'shiladi (yangi oy uchun mijoz qarzi) va adminga xabar beriladi."""
+    qo'shiladi (yangi oy uchun mijoz qarzi) va adminga xabar beriladi.
+
+    Agar "Bo'lib tolash 2x50%" belgilangan bo'lsa, to'lov 2 qismga bo'linadi: birinchi 50%
+    "Boshlanish sanasi" kunida, qolgan 50% shu kundan SPLIT_BILLING_GAP_DAYS kun keyin."""
     if not ADMIN_CHAT_ID:
         return
     try:
@@ -2692,12 +2700,27 @@ async def scheduled_loyiha_billing(context: ContextTypes.DEFAULT_TYPE) -> None:
             boshlanish_kuni = date.fromisoformat(boshlanish[:10]).day
         except ValueError:
             continue
-        if boshlanish_kuni != today.day:
-            continue
+
+        bolib_tolash = nx.get_checkbox(page, "Bolib tolash 2x50%")
+        if bolib_tolash:
+            ikkinchi_kuni = boshlanish_kuni + SPLIT_BILLING_GAP_DAYS
+            if today.day == boshlanish_kuni:
+                summa = round(tolov_summasi / 2)
+                izoh = f"1-qism (50%), {today.day}-sana"
+            elif today.day == ikkinchi_kuni:
+                summa = tolov_summasi - round(tolov_summasi / 2)
+                izoh = f"2-qism (50%), {today.day}-sana"
+            else:
+                continue
+        else:
+            if boshlanish_kuni != today.day:
+                continue
+            summa = tolov_summasi
+            izoh = f"to'liq, {today.day}-sana"
 
         nomi = nx.get_title(page, "Loyiha") or "?"
         joriy_debit = nx.get_number(page, "Debit") or 0
-        yangi_debit = joriy_debit + tolov_summasi
+        yangi_debit = joriy_debit + summa
         try:
             nx.update_page_property(page["id"], {"Debit": {"number": yangi_debit}})
         except Exception:
@@ -2708,8 +2731,8 @@ async def scheduled_loyiha_billing(context: ContextTypes.DEFAULT_TYPE) -> None:
             await context.bot.send_message(
                 chat_id=ADMIN_CHAT_ID,
                 text=(
-                    f"🗓 *{nomi}* — oylik hisob-kitob kuni ({today.day}-sana).\n"
-                    f"💳 Debitga qo'shildi: {_format_som(tolov_summasi)} (jami Debit: {_format_som(yangi_debit)}).\n"
+                    f"🗓 *{nomi}* — oylik hisob-kitob ({izoh}).\n"
+                    f"💳 Debitga qo'shildi: {_format_som(summa)} (jami Debit: {_format_som(yangi_debit)}).\n"
                     f"Pul kelganda \"➕ Kirim qo'shish\" orqali qayd eting."
                 ),
                 parse_mode=ParseMode.MARKDOWN,
