@@ -1136,6 +1136,35 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
 
     text_val = (update.message.text or "").strip()
 
+    # 0) Faoliyat uchun qo'lda sana oralig'i kutilyaptimi?
+    if context.user_data.get("pending_faoliyat_range"):
+        context.user_data.pop("pending_faoliyat_range", None)
+        parts = text_val.replace("-", " ").split()
+        if len(parts) != 2:
+            await update.message.reply_text(
+                "⚠️ Format noto'g'ri. Masalan: 01.08.2026 15.08.2026"
+            )
+            return
+        try:
+            def _parse_kun(s: str) -> date:
+                bits = s.split(".")
+                if len(bits) == 2:
+                    bits.append(str(_tashkent_today().year))
+                d, m, y = (int(x) for x in bits)
+                return date(y, m, d)
+            start = _parse_kun(parts[0])
+            end = _parse_kun(parts[1])
+        except (ValueError, IndexError):
+            await update.message.reply_text(
+                "⚠️ Sanani o'qib bo'lmadi. Masalan: 01.08.2026 15.08.2026"
+            )
+            return
+        if start > end:
+            start, end = end, start
+        await update.message.reply_text(f"⏳ {start.strftime('%d.%m.%Y')} – {end.strftime('%d.%m.%Y')} uchun yig'ilmoqda...")
+        await _do_faoliyat_report(context.bot, chat_id, start, end)
+        return
+
     # 1) Vazifaga izoh kutilyaptimi?
     pending_comment = context.user_data.get("pending_comment_page_id")
     if pending_comment:
@@ -2315,6 +2344,135 @@ async def moliya(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 # ----------------------------------------------------------------------------
+# 📊 Faoliyat — tanlangan vaqt oralig'ida kim nima ish qilgani (admin)
+# ----------------------------------------------------------------------------
+
+def _faoliyat_range_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("📅 Bugun", callback_data="faoliyat_range:bugun"),
+            InlineKeyboardButton("📅 Kecha", callback_data="faoliyat_range:kecha"),
+        ],
+        [
+            InlineKeyboardButton("📅 Bu hafta", callback_data="faoliyat_range:hafta"),
+            InlineKeyboardButton("📅 Oxirgi 7 kun", callback_data="faoliyat_range:7kun"),
+        ],
+        [InlineKeyboardButton("📅 Bu oy", callback_data="faoliyat_range:oy")],
+        [InlineKeyboardButton("✏️ Boshqa oraliq (sana kiritish)", callback_data="faoliyat_range:custom")],
+    ])
+
+
+async def _do_faoliyat_report(bot, chat_id, start: date, end: date) -> None:
+    """[start, end] oralig'ida (ikkalasi ham kiritilgan) har bir xodim nima ish qilganini yig'ib chiqaradi:
+    - DS_VAZIFALAR: "Bajarildi sanasi" shu oraliqda bo'lgan, Holati=Done vazifalar (Mas'ul bo'yicha guruhlangan).
+    - DS_MOLIYA: "Kategoriya"=Ish haqi, "Sana" shu oraliqda bo'lgan kirim yozuvlari (Xodim bo'yicha guruhlangan;
+      bu yerga "Vazifa boshiga" maoshli xodimlarning har bir bajargan ishi va admin qo'lda kiritgan ishlar kiradi)."""
+    start_iso, end_iso = start.isoformat(), end.isoformat()
+
+    try:
+        employees = nx.query_data_source(nx.DS_XODIMLAR)
+    except Exception:
+        logger.exception("Faoliyat uchun xodimlarni olishda xatolik")
+        employees = []
+    emp_name = {e["id"]: (nx.get_title(e, "Ism") or "Noma'lum") for e in employees}
+
+    try:
+        vazifalar = nx.query_data_source(
+            nx.DS_VAZIFALAR,
+            filter_obj={
+                "and": [
+                    {"property": "Holati", "status": {"equals": "Done"}},
+                    {"property": "Bajarildi sanasi", "date": {"on_or_after": start_iso}},
+                    {"property": "Bajarildi sanasi", "date": {"on_or_before": end_iso}},
+                ]
+            },
+            page_size=100,
+        )
+    except Exception:
+        logger.exception("Faoliyat uchun vazifalarni olishda xatolik")
+        vazifalar = []
+
+    try:
+        moliya_yozuvlari = nx.query_data_source(
+            nx.DS_MOLIYA,
+            filter_obj={
+                "and": [
+                    {"property": "Turi", "select": {"equals": "Kirim"}},
+                    {"property": "Kategoriya", "select": {"equals": "Ish haqi"}},
+                    {"property": "Sana", "date": {"on_or_after": start_iso}},
+                    {"property": "Sana", "date": {"on_or_before": end_iso}},
+                ]
+            },
+            page_size=100,
+        )
+    except Exception:
+        logger.exception("Faoliyat uchun moliya yozuvlarini olishda xatolik")
+        moliya_yozuvlari = []
+
+    # emp_id -> {"vazifalar": [(sana, nomi)], "ishlar": [(sana, izoh, summa)]}
+    by_emp: dict[str, dict] = {}
+
+    for v in vazifalar:
+        nomi = nx.get_title(v, "Vazifa") or "?"
+        sana = nx.get_date(v, "Bajarildi sanasi") or ""
+        for emp_id in nx.get_relation_ids(v, "Mas'ul"):
+            by_emp.setdefault(emp_id, {"vazifalar": [], "ishlar": []})
+            by_emp[emp_id]["vazifalar"].append((sana[:10], nomi))
+
+    for m in moliya_yozuvlari:
+        izoh = nx.get_rich_text(m, "Izoh") or nx.get_title(m, "Nomi") or "ish"
+        sana = nx.get_date(m, "Sana") or ""
+        summa = nx.get_number(m, "Summa") or 0
+        for emp_id in nx.get_relation_ids(m, "Xodim"):
+            by_emp.setdefault(emp_id, {"vazifalar": [], "ishlar": []})
+            by_emp[emp_id]["ishlar"].append((sana[:10], izoh, summa))
+
+    davr_str = f"{start.strftime('%d.%m.%Y')} – {end.strftime('%d.%m.%Y')}" if start != end else start.strftime("%d.%m.%Y")
+
+    if not by_emp:
+        await bot.send_message(
+            chat_id=chat_id,
+            text=f"📊 *Faoliyat: {davr_str}*\n\nBu oraliqda hech qanday bajarilgan ish qayd etilmagan.",
+            parse_mode=ParseMode.MARKDOWN,
+        )
+        return
+
+    lines = [f"📊 *Faoliyat: {davr_str}*"]
+    for emp_id, data in sorted(by_emp.items(), key=lambda kv: emp_name.get(kv[0], "")):
+        nomi = emp_name.get(emp_id, "Noma'lum xodim")
+        bo_lim = [f"\n👤 *{nomi}*"]
+        if data["vazifalar"]:
+            bo_lim.append(f"✅ Bajarilgan vazifalar ({len(data['vazifalar'])}):")
+            for sana, vnomi in sorted(data["vazifalar"]):
+                sana_disp = date.fromisoformat(sana).strftime("%d.%m") if sana else "?"
+                bo_lim.append(f"   • {vnomi} — {sana_disp}")
+        if data["ishlar"]:
+            jami = sum(s for _, _, s in data["ishlar"])
+            bo_lim.append(f"💰 Ish haqi yozuvlari ({len(data['ishlar'])} ta, jami {_format_som(jami)}):")
+            for sana, izoh, summa in sorted(data["ishlar"]):
+                sana_disp = date.fromisoformat(sana).strftime("%d.%m") if sana else "?"
+                bo_lim.append(f"   • {sana_disp}: {izoh} — {_format_som(summa)}")
+        lines.append("\n".join(bo_lim))
+
+    matn = "\n".join(lines)
+    # Telegram xabar uzunligi chegarasidan (4096) himoya
+    for i in range(0, len(matn), 3500):
+        await bot.send_message(chat_id=chat_id, text=matn[i:i + 3500], parse_mode=ParseMode.MARKDOWN)
+
+
+@require_auth
+async def faoliyat(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    if not (ADMIN_CHAT_ID and str(chat_id) == str(ADMIN_CHAT_ID)):
+        await update.message.reply_text("Bu bo'lim faqat admin uchun.")
+        return
+    await update.message.reply_text(
+        "📊 Qaysi vaqt oralig'idagi faoliyatni ko'rmoqchisiz?",
+        reply_markup=_faoliyat_range_keyboard(),
+    )
+
+
+# ----------------------------------------------------------------------------
 # 📁 Loyihalar — ro'yxat, pauza/faollashtirish, o'chirish (arxivlash)
 # ----------------------------------------------------------------------------
 
@@ -2753,6 +2911,37 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     action, payload = query.data.split(":", 1)
     chat_id = query.message.chat_id
+
+    if action == "faoliyat_range":
+        if not (ADMIN_CHAT_ID and str(chat_id) == str(ADMIN_CHAT_ID)):
+            await context.bot.send_message(chat_id=chat_id, text="⛔ Bu bo'lim faqat admin uchun.")
+            return
+        today = _tashkent_today()
+        if payload == "bugun":
+            start = end = today
+        elif payload == "kecha":
+            start = end = today - timedelta(days=1)
+        elif payload == "hafta":
+            start = today - timedelta(days=today.weekday())
+            end = today
+        elif payload == "7kun":
+            start = today - timedelta(days=6)
+            end = today
+        elif payload == "oy":
+            start = today.replace(day=1)
+            end = today
+        elif payload == "custom":
+            context.user_data["pending_faoliyat_range"] = True
+            await query.edit_message_text(
+                "✏️ Sanalarni kiriting: BOSHLANISH-SANASI TUGASH-SANASI\n"
+                "Masalan: 01.08.2026 15.08.2026"
+            )
+            return
+        else:
+            return
+        await query.edit_message_text(f"⏳ {start.strftime('%d.%m.%Y')} – {end.strftime('%d.%m.%Y')} uchun yig'ilmoqda...")
+        await _do_faoliyat_report(context.bot, chat_id, start, end)
+        return
 
     if action == "menu" and payload == "yangiloyiha":
         if not (ADMIN_CHAT_ID and str(chat_id) == str(ADMIN_CHAT_ID)):
@@ -3246,7 +3435,10 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         try:
             page = nx.get_page(page_id)
             vazifa_nomi = nx.get_title(page, "Vazifa")
-            nx.update_page_property(page_id, {"Holati": {"status": {"name": "Done"}}})
+            nx.update_page_property(page_id, {
+                "Holati": {"status": {"name": "Done"}},
+                "Bajarildi sanasi": {"date": {"start": _tashkent_today().isoformat()}},
+            })
             await query.edit_message_text(query.message.text + "\n\n✅ Bajarildi deb belgilandi!")
 
             try:
@@ -3307,6 +3499,7 @@ BOT_COMMANDS = [
     BotCommand("target", "Yo'nalishlar bo'yicha progress"),
     BotCommand("reels", "Bugungi reels sonini kiritish"),
     BotCommand("moliya", "Moliya — balansni ko'rish"),
+    BotCommand("faoliyat", "Kim nima ish qilgani (vaqt oralig'i tanlab, admin)"),
     BotCommand("loyihalar", "Loyihalarni boshqarish: pauza/faollashtirish/o'chirish (admin)"),
     BotCommand("yangiloyiha", "Yangi mijoz-loyiha qo'shish (admin)"),
 ]
@@ -3333,6 +3526,7 @@ def main() -> None:
     app.add_handler(CommandHandler("target", target))
     app.add_handler(CommandHandler("reels", reels))
     app.add_handler(CommandHandler("moliya", moliya))
+    app.add_handler(CommandHandler("faoliyat", faoliyat))
     app.add_handler(CommandHandler("loyihalar", loyihalar_cmd))
     app.add_handler(CommandHandler("yangiloyiha", yangiloyiha))
     app.add_handler(CallbackQueryHandler(on_button))
