@@ -693,6 +693,63 @@ async def scheduled_auto_publish(context: ContextTypes.DEFAULT_TYPE) -> None:
                 logger.exception("Adminga avtomatik joylash xabarini yuborib bo'lmadi")
 
 
+DAILY_PUBLISH_CHECK_HOUR = int(os.environ.get("DAILY_PUBLISH_CHECK_HOUR", "21"))
+DAILY_PUBLISH_CHECK_MINUTE = int(os.environ.get("DAILY_PUBLISH_CHECK_MINUTE", "30"))
+
+
+async def scheduled_publish_watchdog(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Har kuni bir marta (kech, DAILY_PUBLISH_CHECK_HOUR'da) ishlaydi: har bir sozlangan
+    Telegram kanal uchun bugun kamida bitta post real ravishda "Joylandi" bo'lganini
+    tekshiradi. Agar bugun uchun reja bo'lmasa yoki reja bor-u lekin hech narsa
+    joylanmagan bo'lsa, adminga ogohlantirish yuboradi — shunda kunlik postlash
+    "ko'zdan chetda" qolib ketmaydi."""
+    if not ADMIN_CHAT_ID:
+        return
+
+    active_channels = [k for k, v in nx.CHANNEL_MAP.items() if v]
+    if not active_channels:
+        return
+
+    today = _tashkent_today()
+    today_iso = today.isoformat()
+    try:
+        postlar = nx.query_data_source(
+            nx.DS_KONTENT_REJA,
+            filter_obj={"property": "Sana", "date": {"equals": today_iso}},
+            page_size=100,
+        )
+    except Exception:
+        logger.exception("Kunlik joylash nazorati uchun postlarni olishda xatolik")
+        return
+
+    muammoli_qatorlar = []
+    for kanal in active_channels:
+        kanal_postlari = [p for p in postlar if (nx.get_select(p, "Kanal") or "") == kanal]
+        if not kanal_postlari:
+            muammoli_qatorlar.append(f"⚠️ *{kanal}*: bugunga kontent-rejada birorta post ham yo'q.")
+            continue
+        joylandimi = any((nx.get_select(p, "Status") or "") == "Joylandi" for p in kanal_postlari)
+        if not joylandimi:
+            holatlar = ", ".join(sorted({nx.get_select(p, "Status") or "?" for p in kanal_postlari}))
+            muammoli_qatorlar.append(
+                f"⚠️ *{kanal}*: {len(kanal_postlari)} ta post rejalashtirilgan, "
+                f"lekin hali birortasi ham kanalga joylanmagan (holati: {holatlar})."
+            )
+
+    if not muammoli_qatorlar:
+        return  # hammasi joyida — spam qilmaymiz
+
+    matn = (
+        f"🔎 *Kunlik post nazorati — {today.strftime('%d.%m.%Y')}*\n\n"
+        + "\n".join(muammoli_qatorlar)
+        + "\n\n/kontent orqali tekshiring yoki /joylash bilan qo'lda joylang."
+    )
+    try:
+        await context.bot.send_message(chat_id=ADMIN_CHAT_ID, text=matn, parse_mode=ParseMode.MARKDOWN)
+    except Exception:
+        logger.exception("Kunlik joylash nazorati xabarini yuborishda xatolik")
+
+
 # ----------------------------------------------------------------------------
 # Har 2 soatda vazifa eslatmasi, kunlik motivatsiya, kechki kayfiyat so'rovi
 # ----------------------------------------------------------------------------
@@ -3564,6 +3621,10 @@ def main() -> None:
         )
         app.job_queue.run_daily(
             scheduled_morning_task_notify, time=dtime(hour=QUIET_HOURS_END, minute=0, tzinfo=TASHKENT_TZ)
+        )
+        app.job_queue.run_daily(
+            scheduled_publish_watchdog,
+            time=dtime(hour=DAILY_PUBLISH_CHECK_HOUR, minute=DAILY_PUBLISH_CHECK_MINUTE, tzinfo=TASHKENT_TZ),
         )
         app.job_queue.run_repeating(
             scheduled_auto_publish, interval=AUTO_PUBLISH_INTERVAL_MINUTES * 60, first=15
