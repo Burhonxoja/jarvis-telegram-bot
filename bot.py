@@ -1373,19 +1373,34 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 "Izoh": {"rich_text": [{"text": {"content": f"Loyiha: {proj_nomi}"}}]},
             })
 
-            debit_xabar = ""
             if pending_income != "none":
+                # Bu pul aynan shu loyihaning joriy (Notion'da hisoblanayotgan) Debit'i uchunmi,
+                # yoki boshqa/eski (tizimda kuzatilmagan) qarz uchunmi — buni har doim SO'RAB
+                # tasdiqlatamiz. Aks holda avtomatik ayirish noto'g'ri summani kamaytirib
+                # qo'yishi mumkin (masalan eski, tizimdan tashqari qarz to'lovini joriy oy
+                # hisobidan ayirib qo'yish kabi xatoliklar bo'lgan).
                 try:
                     proj_page = nx.get_page(pending_income)
                     joriy_debit = nx.get_number(proj_page, "Debit") or 0
-                    if joriy_debit > 0:
-                        yangi_debit = max(0, joriy_debit - summa)
-                        nx.update_page_property(pending_income, {"Debit": {"number": yangi_debit}})
-                        debit_xabar = f"\n💳 Qolgan Debit: {_format_som(yangi_debit)}"
                 except Exception:
-                    logger.exception("Kirim kelganda Debit'ni kamaytirishda xatolik")
+                    logger.exception("Kirim kelganda loyiha Debit'ini olishda xatolik")
+                    joriy_debit = None
+                if joriy_debit and joriy_debit > 0:
+                    context.user_data["pending_debit_confirm"] = {
+                        "project_id": pending_income, "summa": summa, "proj_nomi": proj_nomi,
+                    }
+                    await update.message.reply_text(
+                        f"✅ {proj_nomi}dan {_format_som(summa)} kirim qayd etildi.\n\n"
+                        f"💳 Bu pul shu loyihaning joriy Debit'idan (hozir: {_format_som(joriy_debit)}) "
+                        f"ayirilsinmi, yoki bu boshqa/eski (tizimda hisoblanmagan) qarz uchunmi?",
+                        reply_markup=InlineKeyboardMarkup([[
+                            InlineKeyboardButton("✅ Ha, Debitdan ayir", callback_data="debit_confirm:yes"),
+                            InlineKeyboardButton("❌ Yo'q, boshqa/eski qarz", callback_data="debit_confirm:no"),
+                        ]]),
+                    )
+                    return
 
-            await update.message.reply_text(f"✅ {proj_nomi}dan {_format_som(summa)} kirim qayd etildi.{debit_xabar}")
+            await update.message.reply_text(f"✅ {proj_nomi}dan {_format_som(summa)} kirim qayd etildi.")
         except Exception:
             logger.exception("Kirimni yozishda xatolik")
             await update.message.reply_text("⚠️ Kirimni qayd etib bo'lmadi.")
@@ -2968,6 +2983,27 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
     action, payload = query.data.split(":", 1)
     chat_id = query.message.chat_id
+
+    if action == "debit_confirm":
+        data = context.user_data.pop("pending_debit_confirm", None)
+        if not data:
+            await query.edit_message_text(query.message.text + "\n\n⚠️ Sessiya eskirgan, o'zgarish qilinmadi.")
+            return
+        if payload == "no":
+            await query.edit_message_text(query.message.text + "\n\n👍 Tushunarli, Debit o'zgarishsiz qoldi.")
+            return
+        try:
+            proj_page = nx.get_page(data["project_id"])
+            joriy_debit = nx.get_number(proj_page, "Debit") or 0
+            yangi_debit = max(0, joriy_debit - data["summa"])
+            nx.update_page_property(data["project_id"], {"Debit": {"number": yangi_debit}})
+            await query.edit_message_text(
+                query.message.text + f"\n\n💳 Debitdan ayirildi. Qolgan Debit: {_format_som(yangi_debit)}"
+            )
+        except Exception:
+            logger.exception("Debit tasdiqlashda xatolik")
+            await query.edit_message_text(query.message.text + "\n\n⚠️ Debitni yangilab bo'lmadi.")
+        return
 
     if action == "faoliyat_range":
         if not (ADMIN_CHAT_ID and str(chat_id) == str(ADMIN_CHAT_ID)):
