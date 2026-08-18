@@ -18,15 +18,21 @@ HEADERS = {
 }
 
 # --- Data source ID'lar (Jarvis — Boshqaruv Markazi ichidagi bazalar) ---
-DS_XODIMLAR = "8651b767-340e-4471-8b4f-4fb37434406a"
-DS_VAZIFALAR = "3a611241-9e55-4f21-8903-1c28f3639b1b"
-DS_YONALISHLAR = "9a0b19fa-3721-46d9-8ef1-2d83eb8163ec"
-DS_MOLIYA = "234cfa8f-aa6b-4c8f-a7f9-cf4de3c08fa4"
-DS_KONTENT_REJA = "6ec4eac1-2ba4-4cca-b0f7-864e20368ea6"
-DS_BILIM_BAZASI = "3c38be56-e7be-401f-833a-f99b39174400"
-DS_LEADLAR = "98e6a8ef-edf7-4e26-b7c7-c1edbb8307dc"
-DS_KANAL_SHABLONLARI = "b95e2add-0722-4539-b358-a9cf7b08b834"
-DS_LOYIHALAR = "91ed2d9f-28d8-49c1-aa79-24ad92ab3318"
+# Muhim: shu ID'lar endi muhit o'zgaruvchilaridan o'qiladi (standart qiymat — hozirgi ARK
+# Hospital/Shovkat aka ishlatayotgan asl workspace). Shu tufayli YANGI MIJOZ uchun butunlay
+# alohida nusxa ochish uchun kodni FORK qilish shart emas: mijozning o'z Notion shabloni
+# (dublikat qilingan) + o'z Telegram boti bilan yangi Railway xizmati yaratib, faqat quyidagi
+# DS_... muhit o'zgaruvchilarini (va NOTION_TOKEN, TELEGRAM_TOKEN va h.k.ni) shu mijozning
+# workspace'iga mos qiymatlarga sozlash kifoya — bir xil kod, turli sozlamalar.
+DS_XODIMLAR = os.environ.get("DS_XODIMLAR", "8651b767-340e-4471-8b4f-4fb37434406a")
+DS_VAZIFALAR = os.environ.get("DS_VAZIFALAR", "3a611241-9e55-4f21-8903-1c28f3639b1b")
+DS_YONALISHLAR = os.environ.get("DS_YONALISHLAR", "9a0b19fa-3721-46d9-8ef1-2d83eb8163ec")
+DS_MOLIYA = os.environ.get("DS_MOLIYA", "234cfa8f-aa6b-4c8f-a7f9-cf4de3c08fa4")
+DS_KONTENT_REJA = os.environ.get("DS_KONTENT_REJA", "6ec4eac1-2ba4-4cca-b0f7-864e20368ea6")
+DS_BILIM_BAZASI = os.environ.get("DS_BILIM_BAZASI", "3c38be56-e7be-401f-833a-f99b39174400")
+DS_LEADLAR = os.environ.get("DS_LEADLAR", "98e6a8ef-edf7-4e26-b7c7-c1edbb8307dc")
+DS_KANAL_SHABLONLARI = os.environ.get("DS_KANAL_SHABLONLARI", "b95e2add-0722-4539-b358-a9cf7b08b834")
+DS_LOYIHALAR = os.environ.get("DS_LOYIHALAR", "91ed2d9f-28d8-49c1-aa79-24ad92ab3318")
 
 
 def query_data_source(data_source_id: str, filter_obj: dict | None = None, page_size: int = 50) -> list[dict]:
@@ -175,13 +181,26 @@ def register_employee_chat_id(employee_page_id: str, chat_id: int) -> None:
 
 
 # --- Telegram kanal xaritasi (Kontent-Reja'dagi "Kanal" nomidan haqiqiy Telegram kanaliga) ---
-# Muhit o'zgaruvchilaridan o'qiladi. Hali sozlanmagan bo'lsa, qiymat None bo'ladi va
-# botda "kanal sozlanmagan" degan xabar chiqadi.
-CHANNEL_MAP = {
-    "Telegram - Urolog Shovkat": os.environ.get("CHANNEL_UROLOG_SHOVKAT"),
-    "Telegram - ARK Hospital": os.environ.get("CHANNEL_ARK_HOSPITAL"),
-    "Telegram - 18+ Natijalar": os.environ.get("CHANNEL_18_NATIJALAR"),
-}
+# Ikki usulda sozlanadi:
+# 1) CHANNEL_MAP_JSON — bitta muhit o'zgaruvchisida to'liq JSON xarita, masalan:
+#    {"Mening kanalim": "@mening_kanalim", "Boshqa kanal": "-1001234567890"}
+#    Bu — YANGI MIJOZ uchun alohida nusxa ochganda, kodni o'zgartirmasdan, faqat shu
+#    bitta muhit o'zgaruvchisini sozlash orqali istalgan sondagi/nomdagi kanalni ulash imkonini beradi.
+# 2) CHANNEL_MAP_JSON sozlanmagan bo'lsa — orqaga moslik uchun eski alohida
+#    CHANNEL_UROLOG_SHOVKAT / CHANNEL_ARK_HOSPITAL / CHANNEL_18_NATIJALAR o'zgaruvchilari ishlatiladi.
+import json as _json
+
+if os.environ.get("CHANNEL_MAP_JSON"):
+    try:
+        CHANNEL_MAP = _json.loads(os.environ["CHANNEL_MAP_JSON"])
+    except ValueError:
+        CHANNEL_MAP = {}
+else:
+    CHANNEL_MAP = {
+        "Telegram - Urolog Shovkat": os.environ.get("CHANNEL_UROLOG_SHOVKAT"),
+        "Telegram - ARK Hospital": os.environ.get("CHANNEL_ARK_HOSPITAL"),
+        "Telegram - 18+ Natijalar": os.environ.get("CHANNEL_18_NATIJALAR"),
+    }
 
 
 def get_channel_footer(kanal: str) -> str:
