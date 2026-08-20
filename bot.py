@@ -295,6 +295,7 @@ def _new_loyiha_turi_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("📁 Media loyiha (reels/video/post kuzatiladi)", callback_data="newloyiha_turi:media")],
         [InlineKeyboardButton("🎯 Target loyiha (faqat to'lov, kuzatuv yo'q)", callback_data="newloyiha_turi:target")],
+        [InlineKeyboardButton("🔀 Aralash (ham video/reels, ham target)", callback_data="newloyiha_turi:aralash")],
     ])
 
 
@@ -1156,19 +1157,28 @@ async def jamoa(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     await _do_jamoa_vazifalar(context.bot, update.effective_chat.id)
 
 
-def _auto_income_for_units(page: dict, nomi: str, qoshimcha: int, birlik: str) -> str:
+def _auto_income_for_units(page: dict, nomi: str, qoshimcha: int, birlik: str, narx: float | None = None) -> str:
     """Loyiha "Video/Reels boshiga" to'lov qilsa, qo'shilgan reels/video sonlari uchun
     mijoz qancha TO'LASHI KERAKLIGINI hisoblab, loyihaning "Debit"iga qo'shadi (Debit =
     mandan qarzdorlar, ya'ni mijoz bizga qarzdor bo'lgan summa). E'TIBOR: bu haqiqiy
     Moliya Kirim EMAS — pul hali kelmagan. Pul haqiqatda kelganda "➕ Kirim qo'shish"
     orqali qayd etilganda, o'sha summa shu Debit'dan avtomatik ayiriladi. Qo'shimcha
-    xabar matnini qaytaradi."""
-    tolov_turi = nx.get_select(page, "To'lov turi")
-    tolov_summasi = nx.get_number(page, "To'lov summasi") or 0
-    if tolov_turi != "Video/Reels boshiga" or not tolov_summasi:
+    xabar matnini qaytaradi.
+
+    `narx` berilmasa (None), standart holatda "To'lov turi"=="Video/Reels boshiga" bo'lganda
+    "To'lov summasi" narx sifatida ishlatiladi (reels/video uchun asl xulq-atvor). `narx`
+    aniq berilsa (masalan Aralash loyihalarda target uchun alohida "Target narxi"), o'sha
+    qiymat ishlatiladi — reels narxi bilan ARALASHIB ketmasligi uchun."""
+    if narx is None:
+        tolov_turi = nx.get_select(page, "To'lov turi")
+        tolov_summasi = nx.get_number(page, "To'lov summasi") or 0
+        if tolov_turi != "Video/Reels boshiga" or not tolov_summasi:
+            return ""
+        narx = tolov_summasi
+    if not narx:
         return ""
 
-    debit_qoshimcha = qoshimcha * tolov_summasi
+    debit_qoshimcha = qoshimcha * narx
     try:
         joriy_debit = nx.get_number(page, "Debit") or 0
         yangi_debit = joriy_debit + debit_qoshimcha
@@ -1317,8 +1327,19 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             nx.update_page_property(pending_target_video, {"Target video bajarildi": {"number": yangi}})
             nomi = nx.get_title(page, "Loyiha") or "loyiha"
             proj_turi = nx.get_select(page, "Loyiha turi") or "Media"
-            birlik_soz = "target" if proj_turi == "Target" else "video"
-            qoshimcha_xabar = _auto_income_for_units(page, nomi, qoshimcha, birlik_soz)
+            birlik_soz = "target" if proj_turi in ("Target", "Aralash") else "video"
+            if proj_turi == "Aralash":
+                # Aralash loyihalarda target narxi REELS narxidan MUSTAQIL — ikkalasi
+                # aralashib ketmasligi uchun alohida "Target narxi" maydonidan olinadi.
+                target_narx = nx.get_number(page, "Target narxi") or 0
+                qoshimcha_xabar = _auto_income_for_units(page, nomi, qoshimcha, birlik_soz, narx=target_narx or None)
+                if birlik_soz == "target" and not target_narx:
+                    qoshimcha_xabar += (
+                        "\n💡 Bu loyiha uchun \"Target narxi\" hali belgilanmagan — avtomatik "
+                        "Debit hisoblanmadi. Kerak bo'lsa Notion'da \"Target narxi\"ni to'ldiring."
+                    )
+            else:
+                qoshimcha_xabar = _auto_income_for_units(page, nomi, qoshimcha, birlik_soz)
             await update.message.reply_text(
                 f"✅ {nomi}: +{qoshimcha} {birlik_soz} qo'shildi (jami: {int(yangi)}).{qoshimcha_xabar}"
             )
@@ -1679,6 +1700,27 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 await update.message.reply_text("Iltimos, faqat summa (raqam) yuboring, masalan: 150000")
                 return
             new_loyiha["tolov_summasi"] = summa
+            if new_loyiha.get("loyiha_turi") == "aralash":
+                new_loyiha["stage"] = "target_narxi"
+                await update.message.reply_text(
+                    "✏️ Endi TARGET (reklama) uchun alohida narx: 1 ta target/reklama yoqish "
+                    "necha so'm? (Bu reels narxidan mustaqil — chalkashmasin uchun alohida "
+                    "hisoblanadi). Kerak bo'lmasa \"yo'q\" deb yozing:"
+                )
+                return
+            await _finalize_new_loyiha(context.bot, chat_id, new_loyiha)
+            context.user_data.pop("new_loyiha", None)
+            return
+
+        if stage == "target_narxi":
+            if text_val.strip().lower() in {"yo'q", "yoq", "yuq", "-", "skip"}:
+                new_loyiha["target_narxi"] = None
+            else:
+                try:
+                    new_loyiha["target_narxi"] = float(text_val.replace(" ", "").replace(",", ""))
+                except ValueError:
+                    await update.message.reply_text("Iltimos, faqat summa (raqam) yuboring, masalan: 150000, yoki \"yo'q\" deb yozing.")
+                    return
             await _finalize_new_loyiha(context.bot, chat_id, new_loyiha)
             context.user_data.pop("new_loyiha", None)
             return
@@ -2145,7 +2187,7 @@ async def _do_target_hisobot_menu(bot, chat_id) -> None:
 
 
 def _target_metric_keyboard(project_id: str, loyiha_turi: str = "Media") -> InlineKeyboardMarkup:
-    video_label = "🎯 Target qo'shish" if loyiha_turi == "Target" else "🎞 Video qo'shish"
+    video_label = "🎯 Target qo'shish" if loyiha_turi in ("Target", "Aralash") else "🎞 Video qo'shish"
     return InlineKeyboardMarkup([
         [InlineKeyboardButton(video_label, callback_data=f"target_video:{project_id}")],
         [InlineKeyboardButton("👥 Obunachi sonini yangilash", callback_data=f"target_obuna:{project_id}")],
@@ -2321,8 +2363,11 @@ async def _do_moliya(bot, chat_id) -> None:
         )
 
         try:
+            # Faqat FAOL loyihalar hisoblanadi — Pauzada/Arxivlangan loyihalar to'xtatilgan
+            # bo'lgani uchun ularning eski Debiti umumiy "qancha qarzdormiz" ko'rinishini
+            # chalkashtirmasligi kerak.
             loyihalar_debit = nx.query_data_source(
-                nx.DS_LOYIHALAR, filter_obj={"property": "Holati", "select": {"does_not_equal": "Arxivlangan"}}
+                nx.DS_LOYIHALAR, filter_obj={"property": "Holati", "select": {"equals": "Faol"}}
             )
             debit_qarzdorlar = [
                 (nx.get_title(l, "Loyiha") or "?", nx.get_number(l, "Debit") or 0)
@@ -2557,10 +2602,7 @@ async def _do_loyihalar_menu(bot, chat_id) -> None:
         return
 
     try:
-        loyihalar = nx.query_data_source(
-            nx.DS_LOYIHALAR,
-            filter_obj={"property": "Holati", "select": {"does_not_equal": "Arxivlangan"}},
-        )
+        loyihalar = nx.query_data_source(nx.DS_LOYIHALAR, page_size=100)
     except Exception:
         logger.exception("Loyihalarni olishda xatolik (loyihalar menyu)")
         await bot.send_message(chat_id=chat_id, text="Xatolik yuz berdi.")
@@ -2570,12 +2612,24 @@ async def _do_loyihalar_menu(bot, chat_id) -> None:
         await bot.send_message(chat_id=chat_id, text="Hali hech qanday loyiha qo'shilmagan.")
         return
 
-    rows = []
+    # Faol/Pauzada/Arxivlangan loyihalar aralashib ketmasligi uchun ALOHIDA bo'limlarga
+    # ajratib ko'rsatiladi — birinchi navbatda FAOL loyihalar chiqadi.
+    guruhlar = {"Faol": [], "Pauzada": [], "Arxivlangan": []}
     for l in loyihalar:
-        nomi = nx.get_title(l, "Loyiha") or "?"
         holati = nx.get_select(l, "Holati") or "Faol"
-        emoji = _HOLATI_EMOJI.get(holati, "•")
-        rows.append([InlineKeyboardButton(f"{emoji} {nomi}", callback_data=f"loyiha_view:{l['id']}")])
+        guruhlar.setdefault(holati, []).append(l)
+
+    rows = []
+    sarlavhalar = {"Faol": "✅ Faol loyihalar", "Pauzada": "⏸ Pauzadagi loyihalar", "Arxivlangan": "🗑 To'xtatilgan (arxivlangan) loyihalar"}
+    for holati in ("Faol", "Pauzada", "Arxivlangan"):
+        guruh = guruhlar.get(holati, [])
+        if not guruh:
+            continue
+        rows.append([InlineKeyboardButton(f"— {sarlavhalar[holati]} —", callback_data="noop")])
+        for l in guruh:
+            nomi = nx.get_title(l, "Loyiha") or "?"
+            emoji = _HOLATI_EMOJI.get(holati, "•")
+            rows.append([InlineKeyboardButton(f"{emoji} {nomi}", callback_data=f"loyiha_view:{l['id']}")])
 
     await bot.send_message(
         chat_id=chat_id, text="📁 Loyihalar — boshqarish uchun birini tanlang:", reply_markup=InlineKeyboardMarkup(rows)
@@ -2663,6 +2717,9 @@ async def _send_loyiha_detail(bot, chat_id, page_id: str, edit_query=None) -> No
     await bot.send_message(chat_id=chat_id, text=text, parse_mode=ParseMode.MARKDOWN, reply_markup=keyboard)
 
 
+_LOYIHA_TURI_LABELS = {"target": "Target", "media": "Media", "aralash": "Aralash"}
+
+
 async def _finalize_new_loyiha(bot, chat_id, new_loyiha: dict) -> None:
     """/yangiloyiha oqimi oxirida (to'lov turi/summasi kiritilgan yoki o'tkazib yuborilgandan
     keyin) Loyihalar bazasiga yangi qatorni yozadi."""
@@ -2678,11 +2735,14 @@ async def _finalize_new_loyiha(bot, chat_id, new_loyiha: dict) -> None:
         "Obunachi hozirgi": {"number": 0},
         "Holati": {"select": {"name": "Faol"}},
         "Boshlanish sanasi": {"date": {"start": new_loyiha.get("boshlanish_sanasi") or _tashkent_today().isoformat()}},
-        "Loyiha turi": {"select": {"name": "Target" if new_loyiha.get("loyiha_turi") == "target" else "Media"}},
+        "Loyiha turi": {"select": {"name": _LOYIHA_TURI_LABELS.get(new_loyiha.get("loyiha_turi"), "Media")}},
     }
     kanal = new_loyiha.get("kanal")
     if kanal:
         properties["Bog'liq kanal"] = {"select": {"name": kanal}}
+    target_narxi = new_loyiha.get("target_narxi")
+    if target_narxi:
+        properties["Target narxi"] = {"number": target_narxi}
 
     tolov_turi = new_loyiha.get("tolov_turi")
     tolov_summasi = new_loyiha.get("tolov_summasi")
@@ -2984,6 +3044,9 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     action, payload = query.data.split(":", 1)
     chat_id = query.message.chat_id
 
+    if action == "noop":
+        return
+
     if action == "debit_confirm":
         data = context.user_data.pop("pending_debit_confirm", None)
         if not data:
@@ -3135,7 +3198,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             await query.edit_message_text("⚠️ Loyihani topib bo'lmadi.")
             return
         context.user_data["pending_target_video_project_id"] = project_id
-        if proj_turi == "Target":
+        if proj_turi in ("Target", "Aralash"):
             await query.edit_message_text(f"✏️ {nomi} uchun bugun nechta target bajarilganini/yoqilganini raqam bilan yozing:")
         else:
             await query.edit_message_text(f"✏️ {nomi} uchun bugun nechta yangi video joylanganini raqam bilan yozing:")
@@ -3319,6 +3382,17 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 "💰 Bu qanday to'lov qiladi? (\"Donasiga\" tanlasangiz, keyinchalik \"🎯 Target hisobot\" "
                 "orqali har bajarilgan birlik uchun avtomatik hisoblanadi)",
                 reply_markup=_new_loyiha_tolov_keyboard(),
+            )
+            return
+
+        if payload == "aralash":
+            new_loyiha["loyiha_turi"] = "aralash"
+            new_loyiha["stage"] = "reels_video"
+            await query.edit_message_text(
+                "🔀 Aralash loyiha — ham video/reels, ham target (reklama) alohida-alohida "
+                "kuzatiladi va alohida narxda hisoblanadi (chalkashib ketmasligi uchun).\n\n"
+                "📹 Oylik nechta REELS VIDEO chiqishi kerak? Sonini yozing (masalan: 20).\n"
+                "Kerak bo'lmasa — \"yo'q\" deb yozing:"
             )
             return
 
