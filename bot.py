@@ -2756,6 +2756,22 @@ async def _finalize_new_loyiha(bot, chat_id, new_loyiha: dict) -> None:
         tolov_izoh = f"\n💰 To'lov: har reels/video uchun {_format_som(tolov_summasi or 0)} (avtomatik hisoblanadi)"
     elif tolov_turi == "Oylik (fixed)":
         tolov_izoh = f"\n💰 To'lov: oyiga {_format_som(tolov_summasi or 0)} (fixed)"
+        # MUHIM: agar shu oy uchun "Boshlanish sanasi" kuni ALLAQACHON O'TIB KETGAN bo'lsa
+        # (masalan bugun 20-sana-yu, hisob kuni 10 bo'lsa), avtomatik oylik hisob-kitob
+        # (scheduled_loyiha_billing) faqat KEYINGI oyning shu kunida ishga tushadi — birinchi
+        # oy uchun Debit HECH QACHON qo'yilmay qolib ketadi (bu xatolik uchinchi marta
+        # takrorlandi — ARK Hospital, dr.Uktam, NSH kurs). Shuning oldini olish uchun, agar
+        # hisob kuni bugungidan oldin bo'lsa, birinchi oylik summa darhol Debitga qo'shiladi.
+        # Agar hisob kuni bugun yoki keyinroq bo'lsa — bunga hojat yo'q, chunki avtomatik
+        # job baribir shu oy ichida (ikki marta hisoblanmasin uchun) o'zi qo'shadi.
+        try:
+            boshlanish_str = new_loyiha.get("boshlanish_sanasi") or _tashkent_today().isoformat()
+            boshlanish_kuni = date.fromisoformat(boshlanish_str[:10]).day
+        except ValueError:
+            boshlanish_kuni = _tashkent_today().day
+        if boshlanish_kuni < _tashkent_today().day:
+            properties["Debit"] = {"number": tolov_summasi}
+            tolov_izoh += f"\n💳 Bu oy uchun hisob kuni allaqachon o'tgani sababli, Debitga darhol qo'shildi: {_format_som(tolov_summasi or 0)}"
 
     try:
         nx.create_page(nx.DS_LOYIHALAR, properties)
