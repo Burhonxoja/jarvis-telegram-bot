@@ -3129,6 +3129,62 @@ async def scheduled_loyiha_billing(context: ContextTypes.DEFAULT_TYPE) -> None:
             logger.exception(f"{nomi} uchun oylik hisob-kitob xabarini yuborishda xatolik")
 
 
+async def scheduled_monthly_progress_reset(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Har oyning 1-sanasida ishlaydi: Faol loyihalarning "Reels bajarildi" va "Target video
+    bajarildi" hisoblagichlarini 0ga tushiradi va "Oy" maydonini yangi oyga yangilaydi.
+
+    SABAB: bu hisoblagichlar loyiha yaratilgandan beri to'xtovsiz ortib boradi (hech qachon
+    o'zi tushmaydi), lekin /target va "Loyihalar bo'yicha progress" hisoboti ularni har doim
+    "(YYYY-MM)" — joriy oy — deb ko'rsatadi. Reset qilinmasa, uzoq davom etayotgan loyihalar
+    (masalan ARK Hospital, Shovkat aka) uchun ko'rsatilgan raqam aslida OLDINGI oylardan
+    to'plangan bo'lib chiqadi — xuddi "TG post" hisobida topilgan xato kabi.
+
+    Debit/To'lov (moliya) bu yerda umuman o'zgartirilmaydi — faqat progress-ko'rsatkichlar
+    reset qilinadi, pul hisob-kitobi scheduled_loyiha_billing orqali alohida ishlaydi."""
+    today = _tashkent_today()
+    if today.day != 1:
+        return
+    try:
+        loyihalar = nx.query_data_source(
+            nx.DS_LOYIHALAR, filter_obj={"property": "Holati", "select": {"equals": "Faol"}}
+        )
+    except Exception:
+        logger.exception("Oylik progress-reset uchun loyihalarni olishda xatolik")
+        return
+
+    yangi_oy = _current_month_str()
+    reset_qilinganlar = []
+    for page in loyihalar:
+        nomi = nx.get_title(page, "Loyiha") or "?"
+        eski_reels = nx.get_number(page, "Reels bajarildi") or 0
+        eski_target = nx.get_number(page, "Target video bajarildi") or 0
+        if not eski_reels and not eski_target:
+            continue
+        try:
+            props = {"Reels bajarildi": {"number": 0}, "Oy": {"rich_text": [{"text": {"content": yangi_oy}}]}}
+            if eski_target:
+                props["Target video bajarildi"] = {"number": 0}
+            nx.update_page_property(page["id"], props)
+            reset_qilinganlar.append((nomi, eski_reels, eski_target))
+        except Exception:
+            logger.exception(f"{nomi} uchun oylik progress-resetda xatolik")
+
+    if reset_qilinganlar and ADMIN_CHAT_ID:
+        lines = [f"🔄 *Yangi oy ({yangi_oy}) — progress hisoblagichlari 0ga tushirildi:*\n"]
+        for nomi, reels, target in reset_qilinganlar:
+            qism = f"{nomi}: reels {int(reels)}"
+            if target:
+                qism += f", target {int(target)}"
+            lines.append(f"• {qism} (oldingi oy yakuni)")
+        lines.append("\n💳 Debit/to'lov bunga tegishli emas — faqat progress-ko'rsatkich reset qilindi.")
+        try:
+            await context.bot.send_message(
+                chat_id=ADMIN_CHAT_ID, text="\n".join(lines), parse_mode=ParseMode.MARKDOWN
+            )
+        except Exception:
+            logger.exception("Oylik progress-reset xabarini yuborishda xatolik")
+
+
 # ----------------------------------------------------------------------------
 # Tugma bosilganda (menu:..., vazifa_emp:..., vazifa_date:..., reels_proj:...,
 # comment:..., pay_emp:..., rate_change:..., rate_emp:..., approve / reject / publish / done)
@@ -3835,6 +3891,9 @@ def main() -> None:
         app.job_queue.run_daily(
             scheduled_publish_watchdog,
             time=dtime(hour=DAILY_PUBLISH_CHECK_HOUR, minute=DAILY_PUBLISH_CHECK_MINUTE, tzinfo=TASHKENT_TZ),
+        )
+        app.job_queue.run_daily(
+            scheduled_monthly_progress_reset, time=dtime(hour=0, minute=10, tzinfo=TASHKENT_TZ)
         )
         app.job_queue.run_repeating(
             scheduled_auto_publish, interval=AUTO_PUBLISH_INTERVAL_MINUTES * 60, first=15
