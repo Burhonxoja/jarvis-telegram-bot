@@ -1101,6 +1101,27 @@ async def vazifalarim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
     await _do_vazifalarim(context.bot, update.effective_chat.id)
 
 
+@require_auth
+async def qildim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Donasiga ('Vazifa boshiga') to'lanadigan xodim uchun — alohida vazifa tayinlanishini
+    kutmasdan, o'zi bajargan ish sonini to'g'ridan-to'g'ri yozib qo'yishi uchun (masalan
+    Mubinaning montajlari)."""
+    chat_id = update.effective_chat.id
+    employee = nx.find_employee_by_chat_id(chat_id)
+    if not employee:
+        await update.message.reply_text("Siz hali xodim sifatida ro'yxatdan o'tmagansiz. Avval /men buyrug'ini yuboring.")
+        return
+    turi = nx.get_select(employee, "Maosh turi")
+    if turi != "Vazifa boshiga":
+        await update.message.reply_text(
+            "Bu buyruq faqat donasiga (har bir ish uchun alohida) to'lanadigan xodimlar uchun. "
+            "Savolingiz bo'lsa admin bilan bog'laning."
+        )
+        return
+    context.user_data["pending_self_ish_employee_id"] = employee["id"]
+    await update.message.reply_text("✏️ Nechta ish bajardingiz? Raqam bilan yozing (masalan: 1):")
+
+
 async def _do_jamoa_vazifalar(bot, chat_id) -> None:
     """Admin uchun: har bir xodimda hozir qanday ochiq vazifalar borligini (izohlari bilan) ko'rsatadi."""
     if not (ADMIN_CHAT_ID and str(chat_id) == str(ADMIN_CHAT_ID)):
@@ -1559,6 +1580,61 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
         except Exception:
             logger.exception("Bajarilgan ish sonini yozishda xatolik")
             await update.message.reply_text("⚠️ Ish sonini qayd etib bo'lmadi.")
+        return
+
+    # 3d) Xodim o'zi "/qildim" bilan nechta ish bajarganini yozyaptimi (alohida vazifa
+    # tayinlanmagan, donasiga to'lanadigan ishlar uchun — masalan Mubinaning montajlari)?
+    pending_self_ish = context.user_data.get("pending_self_ish_employee_id")
+    if pending_self_ish:
+        try:
+            son = int(text_val.replace(" ", ""))
+            if son <= 0:
+                raise ValueError
+        except ValueError:
+            await update.message.reply_text("Iltimos, musbat butun son yuboring, masalan: 1")
+            return
+        context.user_data.pop("pending_self_ish_employee_id", None)
+        try:
+            employee = nx.get_page(pending_self_ish)
+            nomi = nx.get_title(employee, "Ism") or "Xodim"
+            summa = nx.get_number(employee, "Maosh summasi") or 0
+            maqsad = nx.get_number(employee, "Maosh maqsad soni") or 0
+            if not summa or not maqsad:
+                await update.message.reply_text(
+                    "⚠️ Sizning donaviy stavkangiz Notion'da to'liq sozlanmagan. Admin bilan bog'laning."
+                )
+                return
+            per_ish = summa / maqsad
+            qoshiladigan = per_ish * son
+            nx.create_page(nx.DS_MOLIYA, {
+                "Nomi": {"title": [{"text": {"content": f"{nomi} — {son} ta ish (o'zi qo'shdi)"}}]},
+                "Turi": {"select": {"name": "Kirim"}},
+                "Kategoriya": {"select": {"name": "Ish haqi"}},
+                "Summa": {"number": qoshiladigan},
+                "Sana": {"date": {"start": _tashkent_today().isoformat()}},
+                "Xodim": {"relation": [{"id": pending_self_ish}]},
+                "Izoh": {"rich_text": [{"text": {"content": f"{son} ta ish, {nomi} o'zi botga qo'shdi"}}]},
+            })
+            try:
+                joriy_kredit = nx.get_number(employee, "Kredit") or 0
+                nx.update_page_property(pending_self_ish, {"Kredit": {"number": joriy_kredit + qoshiladigan}})
+            except Exception:
+                logger.exception(f"{nomi} o'zi ish qo'shganda Kreditga qo'shishda xatolik")
+            await update.message.reply_text(
+                f"✅ Qabul qilindi: {son} ta ish uchun {_format_som(qoshiladigan)} hisoblandi.\n"
+                f"/moliya orqali balansingizni ko'rishingiz mumkin."
+            )
+            if ADMIN_CHAT_ID and str(chat_id) != str(ADMIN_CHAT_ID):
+                try:
+                    await context.bot.send_message(
+                        chat_id=ADMIN_CHAT_ID,
+                        text=f"📌 {nomi} o'zi {son} ta ish qo'shdi (+{_format_som(qoshiladigan)}).",
+                    )
+                except Exception:
+                    logger.exception("Adminga o'z-ish xabarini yuborib bo'lmadi")
+        except Exception:
+            logger.exception("O'z-ish sonini yozishda xatolik")
+            await update.message.reply_text("⚠️ Qayd etib bo'lmadi.")
         return
 
     # 4) Maosh stavkasi o'zgartirilyaptimi?
@@ -3675,6 +3751,7 @@ BOT_COMMANDS = [
     BotCommand("hisobot", "Kunlik dashboard (rasm)"),
     BotCommand("oylik", "Oylik target dashboard (rasm)"),
     BotCommand("vazifalarim", "Menga tayinlangan vazifalar"),
+    BotCommand("qildim", "Donasiga to'lanadigan ishni o'zim yozib qo'yaman (masalan montaj)"),
     BotCommand("jamoa", "Kimda nima vazifa bor (admin)"),
     BotCommand("vazifa", "Yangi TZ berish (tugmalar orqali)"),
     BotCommand("kontent", "Tasdiqlash kutayotgan postlar"),
@@ -3702,6 +3779,7 @@ def main() -> None:
     app.add_handler(CommandHandler("hisobot", hisobot))
     app.add_handler(CommandHandler("oylik", oylik))
     app.add_handler(CommandHandler("vazifalarim", vazifalarim))
+    app.add_handler(CommandHandler("qildim", qildim))
     app.add_handler(CommandHandler("jamoa", jamoa))
     app.add_handler(CommandHandler("vazifa", vazifa))
     app.add_handler(CommandHandler("kontent", kontent))
