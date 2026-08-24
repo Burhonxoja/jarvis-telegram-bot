@@ -553,6 +553,11 @@ def _compute_loyiha_dashboard_data() -> list:
         post_t = nx.get_number(l, "Telegram post target") or 0
         obuna_t = nx.get_number(l, "Obunachi target") or 0
         obuna_d = nx.get_number(l, "Obunachi hozirgi") or 0
+        # Instagram'da haqiqatda joylangan JAMI post soni (reels + rasm/karusel — barchasi),
+        # kunlik "Instagram post count check" scheduled task tomonidan Notion'ga yozib
+        # boriladi ("IG post soni (jami)" maydoni). Bu Reels bajarildi'dan FARQLI — u faqat
+        # reelslarni sanaydi, bu esa Instagramdagi HAMMA post turini (rasm/karusel ham).
+        ig_soni = nx.get_number(l, "IG post soni (jami)") or 0
 
         # Faqat JORIY OYDAGI "Joylandi" postlar sanaladi (Sana maydoni "YYYY-MM" bilan mos
         # kelsa) — eski oylardagi postlar bu oy hisobiga qo'shilmaydi.
@@ -568,6 +573,8 @@ def _compute_loyiha_dashboard_data() -> list:
         metrics = [("Reels", reels_d, reels_t)]
         if video_t or video_d:
             metrics.append(("Target", video_d, video_t))
+        if ig_soni:
+            metrics.append(("IG postlar (jami)", ig_soni, 0))
         metrics.append(("TG post", post_d, post_t))
         if obuna_t or obuna_d:
             metrics.append(("Obunachi", obuna_d, obuna_t))
