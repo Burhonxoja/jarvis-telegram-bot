@@ -515,8 +515,9 @@ def _compute_loyiha_dashboard_data() -> list:
     """Loyihalar bazasidan barcha FAOL (Pauzada/Arxivlangan bo'lmagan) loyihalar bo'yicha
     target/bajarildi ma'lumotlarini yig'adi. "Oy" bo'yicha filtrlanmaydi — loyiha bir marta
     qo'shilgach, har oy qayta yaratish shart emas, u doim "joriy" hisoblanadi (faqat pauzaga
-    qo'yilsa yoki o'chirilsa chetlanadi). Telegram post soni ham OY BO'YICHA EMAS — shu
-    kanaldagi barcha "Joylandi" postlar Kontent-Reja'dan avtomatik sanaladi."""
+    qo'yilsa yoki o'chirilsa chetlanadi). Telegram post soni esa JORIY OYGA filtrlanadi (Sana
+    maydoni shu oy ichida bo'lgan "Joylandi" postlar sanaladi) — chunki hisobot "(YYYY-MM)"
+    deb chiqadi, shuning uchun eski oylardagi postlar joriy oy hisobiga aralashmasligi kerak."""
     try:
         loyihalar = nx.query_data_source(
             nx.DS_LOYIHALAR,
@@ -539,6 +540,8 @@ def _compute_loyiha_dashboard_data() -> list:
         logger.exception("Kontent-rejani olishda xatolik (loyiha dashboard)")
         joylangan_postlar = []
 
+    joriy_oy = _current_month_str()  # masalan "2026-08"
+
     result = []
     for l in loyihalar:
         nomi = nx.get_title(l, "Loyiha") or "?"
@@ -551,12 +554,15 @@ def _compute_loyiha_dashboard_data() -> list:
         obuna_t = nx.get_number(l, "Obunachi target") or 0
         obuna_d = nx.get_number(l, "Obunachi hozirgi") or 0
 
-        # E'TIBOR: oy bo'yicha filtrlanmaydi (loyihalar "Oy"ga qarab emas, doim faol
-        # hisoblanadi) — shu kanaldagi BARCHA "Joylandi" postlar sanaladi.
+        # Faqat JORIY OYDAGI "Joylandi" postlar sanaladi (Sana maydoni "YYYY-MM" bilan mos
+        # kelsa) — eski oylardagi postlar bu oy hisobiga qo'shilmaydi.
         post_d = 0
         if kanal:
             for p in joylangan_postlar:
-                if nx.get_select(p, "Kanal") == kanal:
+                if nx.get_select(p, "Kanal") != kanal:
+                    continue
+                sana = nx.get_date(p, "Sana") or ""
+                if sana[:7] == joriy_oy:
                     post_d += 1
 
         metrics = [("Reels", reels_d, reels_t)]
