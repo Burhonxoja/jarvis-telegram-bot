@@ -703,13 +703,26 @@ async def scheduled_auto_publish(context: ContextTypes.DEFAULT_TYPE) -> None:
 DAILY_PUBLISH_CHECK_HOUR = int(os.environ.get("DAILY_PUBLISH_CHECK_HOUR", "21"))
 DAILY_PUBLISH_CHECK_MINUTE = int(os.environ.get("DAILY_PUBLISH_CHECK_MINUTE", "30"))
 
+# Ba'zi kanallar uchun aniq post-siyosati: kuniga necha ta post, qaysi vaqtlarda, va
+# kamida nechtasi rasmli (Post turi = "Rasm" yoki "Rasm+Matn") bo'lishi kerak.
+# Hozircha faqat ARK Hospital Telegram kanali uchun (foydalanuvchi so'ragan): kuniga 2 ta
+# post, soat 10:00 va 18:00 da, shulardan kamida 1 tasi rasmli.
+CHANNEL_POST_POLICY = {
+    "Telegram - ARK Hospital": {"soni": 2, "vaqtlar": ["10:00", "18:00"], "min_rasmli": 1},
+}
+_RASMLI_TURLAR = {"Rasm", "Rasm+Matn"}
+
 
 async def scheduled_publish_watchdog(context: ContextTypes.DEFAULT_TYPE) -> None:
     """Har kuni bir marta (kech, DAILY_PUBLISH_CHECK_HOUR'da) ishlaydi: har bir sozlangan
     Telegram kanal uchun bugun kamida bitta post real ravishda "Joylandi" bo'lganini
     tekshiradi. Agar bugun uchun reja bo'lmasa yoki reja bor-u lekin hech narsa
     joylanmagan bo'lsa, adminga ogohlantirish yuboradi — shunda kunlik postlash
-    "ko'zdan chetda" qolib ketmaydi."""
+    "ko'zdan chetda" qolib ketmaydi.
+
+    Bundan tashqari, CHANNEL_POST_POLICY'da ro'yxatdan o'tgan kanallar uchun (hozircha
+    faqat ARK Hospital) qat'iyroq tekshiruv qiladi: aniq post soni, vaqtlari va
+    rasmli/rasm+matn turidagi postlar soni siyosatga mos kelishini tekshiradi."""
     if not ADMIN_CHAT_ID:
         return
 
@@ -735,13 +748,29 @@ async def scheduled_publish_watchdog(context: ContextTypes.DEFAULT_TYPE) -> None
         if not kanal_postlari:
             muammoli_qatorlar.append(f"⚠️ *{kanal}*: bugunga kontent-rejada birorta post ham yo'q.")
             continue
-        joylandimi = any((nx.get_select(p, "Status") or "") == "Joylandi" for p in kanal_postlari)
-        if not joylandimi:
+        joylandi_postlar = [p for p in kanal_postlari if (nx.get_select(p, "Status") or "") == "Joylandi"]
+        if not joylandi_postlar:
             holatlar = ", ".join(sorted({nx.get_select(p, "Status") or "?" for p in kanal_postlari}))
             muammoli_qatorlar.append(
                 f"⚠️ *{kanal}*: {len(kanal_postlari)} ta post rejalashtirilgan, "
                 f"lekin hali birortasi ham kanalga joylanmagan (holati: {holatlar})."
             )
+            continue
+
+        policy = CHANNEL_POST_POLICY.get(kanal)
+        if policy:
+            muammolar = []
+            joylandi_soni = len(joylandi_postlar)
+            if joylandi_soni < policy["soni"]:
+                muammolar.append(
+                    f"{joylandi_soni}/{policy['soni']} post joylandi (kerak: {policy['soni']} ta, "
+                    f"soat {'/'.join(policy['vaqtlar'])} da)"
+                )
+            rasmli_soni = sum(1 for p in joylandi_postlar if (nx.get_select(p, "Post turi") or "") in _RASMLI_TURLAR)
+            if rasmli_soni < policy["min_rasmli"]:
+                muammolar.append(f"rasmli post yetarli emas (kerak: kamida {policy['min_rasmli']} ta, hozir {rasmli_soni} ta)")
+            if muammolar:
+                muammoli_qatorlar.append(f"⚠️ *{kanal}* (siyosat): " + "; ".join(muammolar))
 
     if not muammoli_qatorlar:
         return  # hammasi joyida — spam qilmaymiz
@@ -3129,32 +3158,43 @@ async def scheduled_loyiha_billing(context: ContextTypes.DEFAULT_TYPE) -> None:
             logger.exception(f"{nomi} uchun oylik hisob-kitob xabarini yuborishda xatolik")
 
 
-async def scheduled_monthly_progress_reset(context: ContextTypes.DEFAULT_TYPE) -> None:
-    """Har oyning 1-sanasida ishlaydi: Faol loyihalarning "Reels bajarildi" va "Target video
-    bajarildi" hisoblagichlarini 0ga tushiradi va "Oy" maydonini yangi oyga yangilaydi.
+async def scheduled_progress_reset(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Har kuni ishlaydi: har bir Faol loyihaning O'ZINING "Boshlanish sanasi" kun-raqami
+    bugunga to'g'ri kelsa (ya'ni o'sha loyiha uchun yangi oylik sikl boshlansa), o'sha
+    loyihaning "Reels bajarildi" va "Target video bajarildi" hisoblagichlarini 0ga tushiradi
+    va "Oy" maydonini yangilaydi. HAMMA loyiha uchun BIR XIL kalendar sana (masalan har
+    oyning 1-i) EMAS — har bir mijozning o'z sikli o'z sanasida qayta boshlanadi (masalan
+    ARK Hospital/Shovkat aka uchun har oyning 25-sanasi, boshqa loyiha uchun boshqa sana).
 
     SABAB: bu hisoblagichlar loyiha yaratilgandan beri to'xtovsiz ortib boradi (hech qachon
     o'zi tushmaydi), lekin /target va "Loyihalar bo'yicha progress" hisoboti ularni har doim
-    "(YYYY-MM)" — joriy oy — deb ko'rsatadi. Reset qilinmasa, uzoq davom etayotgan loyihalar
-    (masalan ARK Hospital, Shovkat aka) uchun ko'rsatilgan raqam aslida OLDINGI oylardan
-    to'plangan bo'lib chiqadi — xuddi "TG post" hisobida topilgan xato kabi.
+    joriy sikl deb ko'rsatadi. Reset qilinmasa, uzoq davom etayotgan loyihalar uchun
+    ko'rsatilgan raqam aslida OLDINGI sikllardan to'plangan bo'lib chiqadi.
 
     Debit/To'lov (moliya) bu yerda umuman o'zgartirilmaydi — faqat progress-ko'rsatkichlar
     reset qilinadi, pul hisob-kitobi scheduled_loyiha_billing orqali alohida ishlaydi."""
-    today = _tashkent_today()
-    if today.day != 1:
-        return
     try:
         loyihalar = nx.query_data_source(
             nx.DS_LOYIHALAR, filter_obj={"property": "Holati", "select": {"equals": "Faol"}}
         )
     except Exception:
-        logger.exception("Oylik progress-reset uchun loyihalarni olishda xatolik")
+        logger.exception("Progress-reset uchun loyihalarni olishda xatolik")
         return
 
+    today = _tashkent_today()
     yangi_oy = _current_month_str()
     reset_qilinganlar = []
     for page in loyihalar:
+        boshlanish = nx.get_date(page, "Boshlanish sanasi")
+        if not boshlanish:
+            continue
+        try:
+            boshlanish_kuni = date.fromisoformat(boshlanish[:10]).day
+        except ValueError:
+            continue
+        if boshlanish_kuni != today.day:
+            continue
+
         nomi = nx.get_title(page, "Loyiha") or "?"
         eski_reels = nx.get_number(page, "Reels bajarildi") or 0
         eski_target = nx.get_number(page, "Target video bajarildi") or 0
@@ -3167,22 +3207,22 @@ async def scheduled_monthly_progress_reset(context: ContextTypes.DEFAULT_TYPE) -
             nx.update_page_property(page["id"], props)
             reset_qilinganlar.append((nomi, eski_reels, eski_target))
         except Exception:
-            logger.exception(f"{nomi} uchun oylik progress-resetda xatolik")
+            logger.exception(f"{nomi} uchun progress-resetda xatolik")
 
     if reset_qilinganlar and ADMIN_CHAT_ID:
-        lines = [f"🔄 *Yangi oy ({yangi_oy}) — progress hisoblagichlari 0ga tushirildi:*\n"]
+        lines = [f"🔄 *Yangi sikl boshlandi — progress hisoblagichlari 0ga tushirildi:*\n"]
         for nomi, reels, target in reset_qilinganlar:
             qism = f"{nomi}: reels {int(reels)}"
             if target:
                 qism += f", target {int(target)}"
-            lines.append(f"• {qism} (oldingi oy yakuni)")
+            lines.append(f"• {qism} (o'tgan sikl yakuni)")
         lines.append("\n💳 Debit/to'lov bunga tegishli emas — faqat progress-ko'rsatkich reset qilindi.")
         try:
             await context.bot.send_message(
                 chat_id=ADMIN_CHAT_ID, text="\n".join(lines), parse_mode=ParseMode.MARKDOWN
             )
         except Exception:
-            logger.exception("Oylik progress-reset xabarini yuborishda xatolik")
+            logger.exception("Progress-reset xabarini yuborishda xatolik")
 
 
 # ----------------------------------------------------------------------------
@@ -3893,7 +3933,7 @@ def main() -> None:
             time=dtime(hour=DAILY_PUBLISH_CHECK_HOUR, minute=DAILY_PUBLISH_CHECK_MINUTE, tzinfo=TASHKENT_TZ),
         )
         app.job_queue.run_daily(
-            scheduled_monthly_progress_reset, time=dtime(hour=0, minute=10, tzinfo=TASHKENT_TZ)
+            scheduled_progress_reset, time=dtime(hour=0, minute=10, tzinfo=TASHKENT_TZ)
         )
         app.job_queue.run_repeating(
             scheduled_auto_publish, interval=AUTO_PUBLISH_INTERVAL_MINUTES * 60, first=15
