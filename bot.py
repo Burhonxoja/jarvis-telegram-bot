@@ -247,6 +247,7 @@ def io_bytes(b: bytes):
 # ----------------------------------------------------------------------------
 
 def _main_menu_keyboard() -> InlineKeyboardMarkup:
+    """FAQAT ADMIN uchun to'liq menyu."""
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("📋 Vazifa berish", callback_data="menu:vazifa"),
@@ -277,6 +278,43 @@ def _main_menu_keyboard() -> InlineKeyboardMarkup:
             InlineKeyboardButton("🆕 Yangi loyiha qo'shish", callback_data="menu:yangiloyiha"),
         ],
     ])
+
+
+def _employee_menu_keyboard() -> InlineKeyboardMarkup:
+    """Oddiy xodimlar uchun CHEKLANGAN menyu — faqat Moliya (o'z balansi), Vazifalarim va
+    o'zi qilgan ishini qo'shish tugmasi. Boshqa hech qanday bo'lim ko'rinmaydi."""
+    return InlineKeyboardMarkup([
+        [
+            InlineKeyboardButton("💰 Moliya", callback_data="menu:moliya"),
+            InlineKeyboardButton("✅ Vazifalarim", callback_data="menu:vazifalarim"),
+        ],
+        [
+            InlineKeyboardButton("➕ Qilgan ishimni qo'shish", callback_data="menu:ish_qoshish"),
+        ],
+    ])
+
+
+def _is_admin(chat_id) -> bool:
+    return bool(ADMIN_CHAT_ID) and str(chat_id) == str(ADMIN_CHAT_ID)
+
+
+def _menu_keyboard_for(chat_id) -> InlineKeyboardMarkup:
+    return _main_menu_keyboard() if _is_admin(chat_id) else _employee_menu_keyboard()
+
+
+def _ish_qoshish_keyboard() -> InlineKeyboardMarkup:
+    return InlineKeyboardMarkup([
+        [InlineKeyboardButton("🎬 Loyihaga reels/target qo'shish", callback_data="menu:reels")],
+        [InlineKeyboardButton("🔨 O'z ishim (masalan montaj)", callback_data="ish_qoshish:self")],
+    ])
+
+
+async def _do_ish_qoshish_menu(bot, chat_id) -> None:
+    await bot.send_message(
+        chat_id=chat_id,
+        text="Qanday ish qo'shmoqchisiz? 👇",
+        reply_markup=_ish_qoshish_keyboard(),
+    )
 
 
 NEW_LOYIHA_CHANNELS = ["Telegram - Urolog Shovkat", "Telegram - ARK Hospital", "Telegram - 18+ Natijalar"]
@@ -354,13 +392,14 @@ async def start(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         "Salom! Men Jarvis — sizning Notion bilan ulangan yordamchingizman.\n\n"
         f"Sizning chat ID'ingiz: {chat_id}\n\n"
         "Quyidagi tugmalardan foydalaning (yoki / buyruqlarini yozing):",
-        reply_markup=_main_menu_keyboard(),
+        reply_markup=_menu_keyboard_for(chat_id),
     )
 
 
 @require_auth
 async def menu_cmd(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
-    await update.message.reply_text("📋 Asosiy menyu:", reply_markup=_main_menu_keyboard())
+    chat_id = update.effective_chat.id
+    await update.message.reply_text("📋 Asosiy menyu:", reply_markup=_menu_keyboard_for(chat_id))
 
 
 @require_auth
@@ -476,6 +515,9 @@ async def _send_team_donuts(bot, chat_id) -> None:
 
 
 async def _do_hisobot(bot, chat_id) -> None:
+    if not _is_admin(chat_id):
+        await bot.send_message(chat_id=chat_id, text="⛔ Bu bo'lim faqat admin uchun.")
+        return
     await bot.send_message(chat_id=chat_id, text="Dashboard tayyorlanmoqda...")
     try:
         await _send_daily_dashboard(bot, chat_id)
@@ -584,6 +626,9 @@ def _compute_loyiha_dashboard_data() -> list:
 
 
 async def _do_oylik(bot, chat_id) -> None:
+    if not _is_admin(chat_id):
+        await bot.send_message(chat_id=chat_id, text="⛔ Bu bo'lim faqat admin uchun.")
+        return
     await bot.send_message(chat_id=chat_id, text="Oylik dashboard tayyorlanmoqda...")
     try:
         yonalishlar = nx.query_data_source(nx.DS_YONALISHLAR)
@@ -957,6 +1002,9 @@ def _employee_picker_keyboard():
 
 
 async def _do_vazifa_menu(bot, chat_id) -> None:
+    if not _is_admin(chat_id):
+        await bot.send_message(chat_id=chat_id, text="⛔ Vazifa berish faqat admin uchun.")
+        return
     keyboard = _employee_picker_keyboard()
     if not keyboard:
         await bot.send_message(chat_id=chat_id, text="⚠️ Xodimlar bazasida (Notion) hech kim topilmadi.")
@@ -1053,6 +1101,10 @@ async def _create_vazifa(
 
 @require_auth
 async def vazifa(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
+    chat_id = update.effective_chat.id
+    if not _is_admin(chat_id):
+        await update.message.reply_text("⛔ Vazifa berish faqat admin uchun.")
+        return
     matn = " ".join(context.args)
 
     if not matn.strip():
@@ -1994,6 +2046,9 @@ async def _do_kontent(bot, chat_id) -> None:
     """Avval qaysi kanal uchun tasdiqlash kerakligini so'raydi (har birida nechta post
     kutayotgani bilan). Kanal tanlangach, postlar birma-bir (bittadan) yuboriladi —
     ✅/❌ bosilgach, o'sha kanaldagi keyingi post avtomatik keladi."""
+    if not _is_admin(chat_id):
+        await bot.send_message(chat_id=chat_id, text="⛔ Bu bo'lim faqat admin uchun.")
+        return
     try:
         postlar = nx.query_data_source(
             nx.DS_KONTENT_REJA, filter_obj={"property": "Status", "select": {"equals": "Yozildi"}}
@@ -2122,6 +2177,9 @@ async def kontent(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 
 
 async def _do_joylash(bot, chat_id) -> None:
+    if not _is_admin(chat_id):
+        await bot.send_message(chat_id=chat_id, text="⛔ Bu bo'lim faqat admin uchun.")
+        return
     try:
         postlar = nx.query_data_source(
             nx.DS_KONTENT_REJA, filter_obj={"property": "Status", "select": {"equals": "Tasdiqlandi"}}
@@ -2169,6 +2227,9 @@ async def joylash(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
 # ----------------------------------------------------------------------------
 
 async def _do_target(bot, chat_id) -> None:
+    if not _is_admin(chat_id):
+        await bot.send_message(chat_id=chat_id, text="⛔ Bu bo'lim faqat admin uchun.")
+        return
     lines = []
 
     # 1) Yo'nalishlar (umumiy biznes yo'nalishlari, agar kiritilgan bo'lsa)
@@ -3248,6 +3309,29 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
     if action == "noop":
         return
 
+    if action == "ish_qoshish":
+        if payload == "self":
+            employee = nx.find_employee_by_chat_id(chat_id)
+            if not employee:
+                await context.bot.send_message(
+                    chat_id=chat_id, text="Siz hali xodim sifatida ro'yxatdan o'tmagansiz. Avval /men buyrug'ini yuboring."
+                )
+                return
+            turi = nx.get_select(employee, "Maosh turi")
+            if turi != "Vazifa boshiga":
+                await context.bot.send_message(
+                    chat_id=chat_id,
+                    text=(
+                        "Bu tugma faqat donasiga (har bir ish uchun alohida) to'lanadigan xodimlar uchun. "
+                        "Sizning to'lov turingiz boshqacha — loyihaga ish qo'shish uchun \"🎬 Loyihaga reels/target qo'shish\" "
+                        "tugmasidan foydalaning yoki admin bilan bog'laning."
+                    ),
+                )
+                return
+            context.user_data["pending_self_ish_employee_id"] = employee["id"]
+            await context.bot.send_message(chat_id=chat_id, text="✏️ Nechta ish bajardingiz? Raqam bilan yozing (masalan: 1):")
+        return
+
     if action == "debit_confirm":
         data = context.user_data.pop("pending_debit_confirm", None)
         if not data:
@@ -3323,6 +3407,7 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "kirim": _do_kirim_menu,
             "loyihalar": _do_loyihalar_menu,
             "target_hisobot": _do_target_hisobot_menu,
+            "ish_qoshish": _do_ish_qoshish_menu,
         }
         handler = dispatch.get(payload)
         if handler:
