@@ -280,17 +280,47 @@ def _main_menu_keyboard() -> InlineKeyboardMarkup:
     ])
 
 
-def _employee_menu_keyboard() -> InlineKeyboardMarkup:
+def _vazifa_boshiga_ismlar() -> list[str]:
+    """"Maosh turi" = "Vazifa boshiga" (donasiga to'lanadigan) xodimlarning ismlari
+    ro'yxati — masalan montajor Mubina. Xato bo'lsa bo'sh ro'yxat qaytaradi."""
+    try:
+        xodimlar = nx.query_data_source(
+            nx.DS_XODIMLAR, filter_obj={"property": "Maosh turi", "select": {"equals": "Vazifa boshiga"}}
+        )
+    except Exception:
+        logger.exception("'Vazifa boshiga' xodimlarni olishda xatolik")
+        return []
+    return [nx.get_title(e, "Ism") for e in xodimlar if nx.get_title(e, "Ism")]
+
+
+def _employee_menu_keyboard(chat_id=None) -> InlineKeyboardMarkup:
     """Oddiy xodimlar uchun CHEKLANGAN menyu — faqat Moliya (o'z balansi), Vazifalarim va
-    o'zi qilgan ishini qo'shish tugmasi. Boshqa hech qanday bo'lim ko'rinmaydi."""
+    o'zi qilgan ishini qo'shish tugmasi. Boshqa hech qanday bo'lim ko'rinmaydi.
+
+    "Ish qo'shish" tugmasi xodimning "Maosh turi"ga qarab BIR BOSISHDA to'g'ri oqimga
+    olib boradi (oldin 2 bosqich edi — avval submenyu, keyin son so'rash): "Vazifa
+    boshiga" to'lanadigan xodimlar (masalan montajor Mubina) uchun to'g'ridan-to'g'ri
+    "✅ Vazifa bajardim" (son so'raydi), boshqalar uchun "🎬 Loyihaga reels qo'shish"."""
+    is_vazifa_boshiga = False
+    if chat_id is not None:
+        try:
+            employee = nx.find_employee_by_chat_id(chat_id)
+            if employee and nx.get_select(employee, "Maosh turi") == "Vazifa boshiga":
+                is_vazifa_boshiga = True
+        except Exception:
+            logger.exception("Xodim maosh turini aniqlashda xatolik (menyu)")
+
+    if is_vazifa_boshiga:
+        ish_tugmasi = InlineKeyboardButton("✅ Vazifa bajardim", callback_data="ish_qoshish:self")
+    else:
+        ish_tugmasi = InlineKeyboardButton("🎬 Loyihaga reels qo'shish", callback_data="menu:reels")
+
     return InlineKeyboardMarkup([
         [
             InlineKeyboardButton("💰 Moliya", callback_data="menu:moliya"),
             InlineKeyboardButton("✅ Vazifalarim", callback_data="menu:vazifalarim"),
         ],
-        [
-            InlineKeyboardButton("➕ Qilgan ishimni qo'shish", callback_data="menu:ish_qoshish"),
-        ],
+        [ish_tugmasi],
     ])
 
 
@@ -299,22 +329,7 @@ def _is_admin(chat_id) -> bool:
 
 
 def _menu_keyboard_for(chat_id) -> InlineKeyboardMarkup:
-    return _main_menu_keyboard() if _is_admin(chat_id) else _employee_menu_keyboard()
-
-
-def _ish_qoshish_keyboard() -> InlineKeyboardMarkup:
-    return InlineKeyboardMarkup([
-        [InlineKeyboardButton("🎬 Loyihaga reels qo'shish", callback_data="menu:reels")],
-        [InlineKeyboardButton("✅ Vazifa bajardim (masalan montaj)", callback_data="ish_qoshish:self")],
-    ])
-
-
-async def _do_ish_qoshish_menu(bot, chat_id) -> None:
-    await bot.send_message(
-        chat_id=chat_id,
-        text="Qanday ish qo'shmoqchisiz? 👇",
-        reply_markup=_ish_qoshish_keyboard(),
-    )
+    return _main_menu_keyboard() if _is_admin(chat_id) else _employee_menu_keyboard(chat_id)
 
 
 NEW_LOYIHA_CHANNELS = ["Telegram - Urolog Shovkat", "Telegram - ARK Hospital", "Telegram - 18+ Natijalar"]
@@ -1207,10 +1222,9 @@ async def qildim(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
         return
     turi = nx.get_select(employee, "Maosh turi")
     if turi != "Vazifa boshiga":
-        await update.message.reply_text(
-            "Bu buyruq faqat donasiga (har bir ish uchun alohida) to'lanadigan xodimlar uchun. "
-            "Savolingiz bo'lsa admin bilan bog'laning."
-        )
+        kimlar = _vazifa_boshiga_ismlar()
+        kim_matni = ", ".join(kimlar) if kimlar else "donasiga to'lanadigan xodim"
+        await update.message.reply_text(f"Kechirasiz, bu faqat {kim_matni} uchun.")
         return
     context.user_data["pending_self_ish_employee_id"] = employee["id"]
     await update.message.reply_text("✏️ Nechta ish bajardingiz? Raqam bilan yozing (masalan: 1):")
@@ -3319,13 +3333,11 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
                 return
             turi = nx.get_select(employee, "Maosh turi")
             if turi != "Vazifa boshiga":
+                kimlar = _vazifa_boshiga_ismlar()
+                kim_matni = ", ".join(kimlar) if kimlar else "donasiga to'lanadigan xodim"
                 await context.bot.send_message(
                     chat_id=chat_id,
-                    text=(
-                        "Bu tugma faqat donasiga (har bir ish uchun alohida) to'lanadigan xodimlar uchun. "
-                        "Sizning to'lov turingiz boshqacha — loyihaga ish qo'shish uchun \"🎬 Loyihaga reels/target qo'shish\" "
-                        "tugmasidan foydalaning yoki admin bilan bog'laning."
-                    ),
+                    text=f"Kechirasiz, bu faqat {kim_matni} uchun.",
                 )
                 return
             context.user_data["pending_self_ish_employee_id"] = employee["id"]
@@ -3407,7 +3419,6 @@ async def on_button(update: Update, context: ContextTypes.DEFAULT_TYPE) -> None:
             "kirim": _do_kirim_menu,
             "loyihalar": _do_loyihalar_menu,
             "target_hisobot": _do_target_hisobot_menu,
-            "ish_qoshish": _do_ish_qoshish_menu,
         }
         handler = dispatch.get(payload)
         if handler:
