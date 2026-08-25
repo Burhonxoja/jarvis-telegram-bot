@@ -305,7 +305,7 @@ def _menu_keyboard_for(chat_id) -> InlineKeyboardMarkup:
 def _ish_qoshish_keyboard() -> InlineKeyboardMarkup:
     return InlineKeyboardMarkup([
         [InlineKeyboardButton("🎬 Loyihaga reels qo'shish", callback_data="menu:reels")],
-        [InlineKeyboardButton("🔨 O'z ishim (masalan montaj)", callback_data="ish_qoshish:self")],
+        [InlineKeyboardButton("✅ Vazifa bajardim (masalan montaj)", callback_data="ish_qoshish:self")],
     ])
 
 
