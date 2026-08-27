@@ -3280,23 +3280,32 @@ async def scheduled_progress_reset(context: ContextTypes.DEFAULT_TYPE) -> None:
         nomi = nx.get_title(page, "Loyiha") or "?"
         eski_reels = nx.get_number(page, "Reels bajarildi") or 0
         eski_target = nx.get_number(page, "Target video bajarildi") or 0
-        if not eski_reels and not eski_target:
+        eski_ig = nx.get_number(page, "IG post soni (jami)") or 0
+        if not eski_reels and not eski_target and not eski_ig:
             continue
         try:
             props = {"Reels bajarildi": {"number": 0}, "Oy": {"rich_text": [{"text": {"content": yangi_oy}}]}}
             if eski_target:
                 props["Target video bajarildi"] = {"number": 0}
+            if eski_ig:
+                # IG oxirgi post URL'ga TEGMAYMIZ (u eng oxirgi ma'lum postga ishora qiladi) —
+                # shunda ertangi kundan boshlab Instagram tekshiruvi faqat YANGI postlarni
+                # hisoblab, yangi sikl uchun 0dan qayta boshlaydi.
+                props["IG post soni (jami)"] = {"number": 0}
+                props["IG collab postlar"] = {"number": 0}
             nx.update_page_property(page["id"], props)
-            reset_qilinganlar.append((nomi, eski_reels, eski_target))
+            reset_qilinganlar.append((nomi, eski_reels, eski_target, eski_ig))
         except Exception:
             logger.exception(f"{nomi} uchun progress-resetda xatolik")
 
     if reset_qilinganlar and ADMIN_CHAT_ID:
         lines = [f"🔄 *Yangi sikl boshlandi — progress hisoblagichlari 0ga tushirildi:*\n"]
-        for nomi, reels, target in reset_qilinganlar:
+        for nomi, reels, target, ig in reset_qilinganlar:
             qism = f"{nomi}: reels {int(reels)}"
             if target:
                 qism += f", target {int(target)}"
+            if ig:
+                qism += f", IG postlar {int(ig)}"
             lines.append(f"• {qism} (o'tgan sikl yakuni)")
         lines.append("\n💳 Debit/to'lov bunga tegishli emas — faqat progress-ko'rsatkich reset qilindi.")
         try:
