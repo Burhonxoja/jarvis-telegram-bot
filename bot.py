@@ -1669,7 +1669,7 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             qoshiladigan = per_ish * son
             nx.create_page(nx.DS_MOLIYA, {
                 "Nomi": {"title": [{"text": {"content": f"{nomi} — {son} ta ish (qo'lda kiritildi)"}}]},
-                "Turi": {"select": {"name": "Kirim"}},
+                "Turi": {"select": {"name": "Ish haqi"}},
                 "Kategoriya": {"select": {"name": "Ish haqi"}},
                 "Summa": {"number": qoshiladigan},
                 "Sana": {"date": {"start": _tashkent_today().isoformat()}},
@@ -1716,7 +1716,7 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
             qoshiladigan = per_ish * son
             nx.create_page(nx.DS_MOLIYA, {
                 "Nomi": {"title": [{"text": {"content": f"{nomi} — {son} ta ish (o'zi qo'shdi)"}}]},
-                "Turi": {"select": {"name": "Kirim"}},
+                "Turi": {"select": {"name": "Ish haqi"}},
                 "Kategoriya": {"select": {"name": "Ish haqi"}},
                 "Summa": {"number": qoshiladigan},
                 "Sana": {"date": {"start": _tashkent_today().isoformat()}},
@@ -2707,7 +2707,7 @@ async def _do_faoliyat_report(bot, chat_id, start: date, end: date) -> None:
             nx.DS_MOLIYA,
             filter_obj={
                 "and": [
-                    {"property": "Turi", "select": {"equals": "Kirim"}},
+                    {"property": "Turi", "select": {"equals": "Ish haqi"}},
                     {"property": "Kategoriya", "select": {"equals": "Ish haqi"}},
                     {"property": "Sana", "date": {"on_or_after": start_iso}},
                     {"property": "Sana", "date": {"on_or_before": end_iso}},
@@ -3045,7 +3045,7 @@ def _accrue_task_payment(task_page: dict) -> None:
         try:
             nx.create_page(nx.DS_MOLIYA, {
                 "Nomi": {"title": [{"text": {"content": f"{nomi} — vazifa haqi"}}]},
-                "Turi": {"select": {"name": "Kirim"}},
+                "Turi": {"select": {"name": "Ish haqi"}},
                 "Kategoriya": {"select": {"name": "Ish haqi"}},
                 "Summa": {"number": per_task},
                 "Sana": {"date": {"start": _tashkent_today().isoformat()}},
