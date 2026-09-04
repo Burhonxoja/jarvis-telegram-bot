@@ -3161,6 +3161,58 @@ async def scheduled_settlement_check(context: ContextTypes.DEFAULT_TYPE) -> None
             logger.exception(f"{nomi} uchun hisob-kitob xabarini yuborishda xatolik")
 
 
+# Har hafta (dushanba) shu vaqtda, agar biror FAOL loyihada Debit (mijoz qarzi) bo'lsa,
+# adminga ro'yxat + har biriga to'g'ridan-to'g'ri "Kirim qo'shish" tugmasi bilan eslatma
+# yuboriladi. Sabab: mijozdan pul kelganda buni Notion/botga yozib qo'yish ADMIN qo'lida —
+# eslatma bo'lmasa, Debit haqiqiy holatni aks ettirmay, oyma-oy asossiz o'sib ketaveradi.
+DEBIT_REMINDER_HOUR = int(os.environ.get("DEBIT_REMINDER_HOUR", "9"))
+DEBIT_REMINDER_MINUTE = int(os.environ.get("DEBIT_REMINDER_MINUTE", "15"))
+
+
+async def scheduled_debit_reminder(context: ContextTypes.DEFAULT_TYPE) -> None:
+    """Har hafta dushanba kuni ishlaydi: FAOL loyihalar orasida Debit (mijoz qarzi) > 0
+    bo'lganlarni ro'yxatlab, adminga har biri uchun to'g'ridan-to'g'ri "Kirim qo'shish"
+    tugmasi bilan eslatma yuboradi — shunda pul kelganda yozib qo'yish unutilmaydi."""
+    if not ADMIN_CHAT_ID:
+        return
+    try:
+        loyihalar = nx.query_data_source(
+            nx.DS_LOYIHALAR, filter_obj={"property": "Holati", "select": {"equals": "Faol"}}
+        )
+    except Exception:
+        logger.exception("Debit eslatmasi uchun loyihalarni olishda xatolik")
+        return
+
+    qarzdorlar = [
+        (l["id"], nx.get_title(l, "Loyiha") or "?", nx.get_number(l, "Debit") or 0)
+        for l in loyihalar
+        if (nx.get_number(l, "Debit") or 0) > 0
+    ]
+    if not qarzdorlar:
+        return
+    qarzdorlar.sort(key=lambda x: x[2], reverse=True)
+    jami = sum(d for _, _, d in qarzdorlar)
+
+    lines = [
+        f"💳 *Haftalik eslatma — mandan qarzdorlar* (jami: {_format_som(jami)})\n",
+        "Pul kelgan bo'lsa, shu yerdan to'g'ridan-to'g'ri yozib qo'ying — aks holda Debit "
+        "haqiqiy holatni ko'rsatmay qoladi:",
+    ]
+    keyboard_rows = [
+        [InlineKeyboardButton(f"➕ {nomi}: {_format_som(debit)}", callback_data=f"kirim_proj:{pid}")]
+        for pid, nomi, debit in qarzdorlar[:15]
+    ]
+    try:
+        await context.bot.send_message(
+            chat_id=ADMIN_CHAT_ID,
+            text="\n".join(lines),
+            parse_mode=ParseMode.MARKDOWN,
+            reply_markup=InlineKeyboardMarkup(keyboard_rows),
+        )
+    except Exception:
+        logger.exception("Haftalik Debit eslatmasini yuborishda xatolik")
+
+
 # Bo'lib to'lanadigan loyihalarda (checkbox yoqilgan) ikkinchi 50% birinchi to'lov kunidan
 # necha kun keyin hisoblanishi (masalan 21-sana + 5 kun = 26-sana).
 SPLIT_BILLING_GAP_DAYS = int(os.environ.get("SPLIT_BILLING_GAP_DAYS", "5"))
@@ -4035,6 +4087,11 @@ def main() -> None:
             scheduled_settlement_check, time=dtime(hour=SETTLEMENT_HOUR, minute=SETTLEMENT_MINUTE, tzinfo=TASHKENT_TZ)
         )
         app.job_queue.run_daily(
+            scheduled_debit_reminder,
+            time=dtime(hour=DEBIT_REMINDER_HOUR, minute=DEBIT_REMINDER_MINUTE, tzinfo=TASHKENT_TZ),
+            days=(0,),  # dushanba
+        )
+        app.job_queue.run_daily(
             scheduled_loyiha_billing, time=dtime(hour=LOYIHA_BILLING_HOUR, minute=LOYIHA_BILLING_MINUTE, tzinfo=TASHKENT_TZ)
         )
         app.job_queue.run_daily(
@@ -4054,6 +4111,7 @@ def main() -> None:
             f"Vazifa eslatmalari: {REMINDER_HOURS}, motivatsiya: {MOTIVATION_HOUR:02d}:{MOTIVATION_MINUTE:02d}, "
             f"kayfiyat so'rovi: {MOOD_HOUR:02d}:{MOOD_MINUTE:02d}, "
             f"hisob-kitob tekshiruvi: har kuni {SETTLEMENT_HOUR:02d}:{SETTLEMENT_MINUTE:02d} (har xodimning o'z 'Hisob kuni'sida), "
+            f"haftalik Debit eslatmasi: dushanba {DEBIT_REMINDER_HOUR:02d}:{DEBIT_REMINDER_MINUTE:02d}, "
             f"loyiha oylik hisob-kitobi: har kuni {LOYIHA_BILLING_HOUR:02d}:{LOYIHA_BILLING_MINUTE:02d} (har loyihaning 'Boshlanish sanasi' kunida), "
             f"tungi tinchlik: {QUIET_HOURS_START:02d}:00–{QUIET_HOURS_END:02d}:00 (xodimlarga avtomatik xabar yo'q), "
             f"avtomatik joylash: har {AUTO_PUBLISH_INTERVAL_MINUTES} daqiqada"
