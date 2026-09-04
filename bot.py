@@ -2991,15 +2991,22 @@ async def yangiloyiha(update: Update, context: ContextTypes.DEFAULT_TYPE) -> Non
 
 
 def _income_project_picker_keyboard():
-    """Loyihadan tushgan pulni qaysi loyihaga yozishni tanlash uchun tugmalar (+ 'Boshqa')."""
-    month = _current_month_str()
+    """Loyihadan tushgan pulni qaysi loyihaga yozishni tanlash uchun tugmalar (+ 'Boshqa').
+
+    MUHIM: avval bu yerda "Oy" maydoni joriy oyga teng bo'lgan loyihalar filtrlanardi —
+    lekin "Oy" faqat o'sha loyihaning billing-sikli shu oyda ISHGA TUSHGANDA yangilanadi
+    (har loyihaning o'z "Boshlanish sanasi" kuni bor), shuning uchun ko'pchilik FAOL
+    loyiha bu tugmalar ro'yxatida ko'rinmay qolardi. Endi shunchaki BARCHA "Faol"
+    loyihalar ko'rsatiladi."""
     try:
         loyihalar = nx.query_data_source(
-            nx.DS_LOYIHALAR, filter_obj={"property": "Oy", "rich_text": {"equals": month}}
+            nx.DS_LOYIHALAR, filter_obj={"property": "Holati", "select": {"equals": "Faol"}}
         )
     except Exception:
         logger.exception("Loyihalarni olishda xatolik (kirim)")
         loyihalar = []
+
+    loyihalar.sort(key=lambda l: (nx.get_title(l, "Loyiha") or "?").lower())
 
     rows = []
     for l in loyihalar:
