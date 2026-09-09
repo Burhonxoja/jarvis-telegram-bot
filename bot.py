@@ -2446,9 +2446,22 @@ def _moliya_period_totals(employee: dict, today: date | None = None) -> tuple:
         period_start = date(today.year, today.month, 1)
         period_end = date(today.year, today.month, days_in_month)
 
+    # MUHIM: avval bu yerda "Xodim" relationi bo'yicha SERVER TOMONDA filtrlanardi
+    # ({"property": "Xodim", "relation": {"contains": employee_id}}) — lekin bu filtr
+    # ba'zan (masalan Hasan uchun) hech narsa topmay, chiqim/kirim JIMGINA 0 chiqib
+    # ketishiga sabab bo'lgan (aniq sababi noma'lum — ehtimol shu turdagi filtr
+    # "/data_sources/.../query" endpoint'ida barqaror ishlamaydi). Shuning uchun endi
+    # SANA bo'yicha (bu ko'p joyda sinalgan, ishonchli ishlaydigan filtr turi) server
+    # tomonda filtrlanadi, "Xodim" mosligi esa PYTHON tomonda (get_relation_ids) tekshiriladi.
     try:
         entries = nx.query_data_source(
-            nx.DS_MOLIYA, filter_obj={"property": "Xodim", "relation": {"contains": employee_id}}
+            nx.DS_MOLIYA,
+            filter_obj={
+                "and": [
+                    {"property": "Sana", "date": {"on_or_after": period_start.isoformat()}},
+                    {"property": "Sana", "date": {"on_or_before": period_end.isoformat()}},
+                ]
+            },
         )
     except Exception:
         logger.exception("Moliya yozuvlarini olishda xatolik")
@@ -2457,6 +2470,8 @@ def _moliya_period_totals(employee: dict, today: date | None = None) -> tuple:
     chiqim = 0
     kirim_recorded = 0
     for e in entries:
+        if employee_id not in nx.get_relation_ids(e, "Xodim"):
+            continue
         sana_str = (nx.get_date(e, "Sana") or "")[:10]
         try:
             sana = date.fromisoformat(sana_str)
