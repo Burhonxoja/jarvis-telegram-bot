@@ -2612,12 +2612,16 @@ async def _do_moliya(bot, chat_id) -> None:
         turi = nx.get_select(e, "Maosh turi")
         kirim, chiqim, davr_boshi, davr_oxiri = _moliya_period_totals(e)
         davr = f"{davr_boshi.strftime('%d.%m')} – {davr_oxiri.strftime('%d.%m')}"
-        # "Kredit" — to'lanmagan, davrlar osha jamg'arilib boruvchi umumiy qarz. To'lovlar
-        # allaqachon Kreditdan ayirilgan bo'ladi (to'lov qilingan zahoti), shuning uchun bu
-        # yerda "chiqim"ni yana ayirish shart emas — faqat "Kunlik" turi uchun hali
-        # bankvordan o'tmagan joriy davr jamg'armasi ustiga qo'shiladi (real vaqtli ko'rinish).
+        # "Kredit" — to'lanmagan, davrlar osha jamg'arilib boruvchi umumiy qarz. Boshqa
+        # turlar uchun (Vazifa boshiga va h.k.) to'lovlar allaqachon Kreditdan ayirilgan
+        # bo'ladi (to'lov/avans qilingan zahoti), shuning uchun bu yerda "chiqim"ni yana
+        # ayirish shart emas. LEKIN "Kunlik" turi uchun joriy davr jamg'armasi ("kirim")
+        # har safar XOM holda (to'lovlarsiz) qaytadan hisoblanadi va hali "Kredit"ga
+        # qo'shilmagan bo'ladi (bu faqat davr yakunida — hisob-kitob kunida — sodir bo'ladi),
+        # shuning uchun shu davr ichida berilgan avans/to'lov ("chiqim") shu yerda ALOHIDA
+        # ayirilishi SHART — aks holda joriy davrda qilingan to'lov balansda ko'rinmay qoladi.
         kredit_hozir = nx.get_number(e, "Kredit") or 0
-        balans = kredit_hozir + kirim if turi == "Kunlik (oylik summadan)" else kredit_hozir
+        balans = kredit_hozir + kirim - chiqim if turi == "Kunlik (oylik summadan)" else kredit_hozir
         qoshimcha = ""
         if turi == "Vazifa boshiga":
             summa = nx.get_number(e, "Maosh summasi") or 0
@@ -2625,9 +2629,10 @@ async def _do_moliya(bot, chat_id) -> None:
             if summa and maqsad:
                 bajarilgan = round(kirim / (summa / maqsad))
                 qoshimcha = f", {bajarilgan:g}/{maqsad:g} ish (bu davr)"
+        chiqim_matni = f", shu davrda to'langan: {_format_som(chiqim)}" if (turi == "Kunlik (oylik summadan)" and chiqim) else ""
         lines.append(
             f"👤 *{nomi}*: {_format_som(balans)}\n"
-            f"   (💳 Kredit: {_format_som(kredit_hozir)}, joriy davr ({davr}) jamg'armasi: {_format_som(kirim)}{qoshimcha})"
+            f"   (💳 Kredit: {_format_som(kredit_hozir)}, joriy davr ({davr}) jamg'armasi: {_format_som(kirim)}{chiqim_matni}{qoshimcha})"
         )
         if is_admin_view:
             pay_rows.append([
@@ -3128,10 +3133,11 @@ async def scheduled_settlement_check(context: ContextTypes.DEFAULT_TYPE) -> None
         # to'lanmasa, davr almashganda yo'qolib qolardi. Shu yerda uni doimiy "Kredit"ga
         # qo'shib qo'yamiz, shunda to'lanmaguncha hisobda qolaveradi. ("Vazifa boshiga"
         # turi buni allaqachon _accrue_task_payment orqali har bir bajarilgan ishda oladi.)
-        if turi == "Kunlik (oylik summadan)" and kirim:
+        if turi == "Kunlik (oylik summadan)" and (kirim or chiqim):
             try:
                 joriy_kredit = nx.get_number(e, "Kredit") or 0
-                nx.update_page_property(e["id"], {"Kredit": {"number": joriy_kredit + kirim}})
+                yangi_kredit = max(joriy_kredit + kirim - chiqim, 0)
+                nx.update_page_property(e["id"], {"Kredit": {"number": yangi_kredit}})
             except Exception:
                 logger.exception(f"{nomi} uchun davr yakunida Kreditga qo'shishda xatolik")
 
