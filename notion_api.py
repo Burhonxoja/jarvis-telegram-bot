@@ -35,15 +35,34 @@ DS_KANAL_SHABLONLARI = os.environ.get("DS_KANAL_SHABLONLARI", "b95e2add-0722-453
 DS_LOYIHALAR = os.environ.get("DS_LOYIHALAR", "91ed2d9f-28d8-49c1-aa79-24ad92ab3318")
 
 
-def query_data_source(data_source_id: str, filter_obj: dict | None = None, page_size: int = 50) -> list[dict]:
-    """Berilgan data source'dan sahifalarni qaytaradi (filtrlash bilan yoki filtrsiz)."""
+def query_data_source(data_source_id: str, filter_obj: dict | None = None, page_size: int = 100) -> list[dict]:
+    """Berilgan data source'dan BARCHA mos sahifalarni qaytaradi (filtrlash bilan yoki filtrsiz).
+
+    MUHIM: avval bu funksiya faqat BITTA sahifani (page_size=50, standart) qaytarardi —
+    ya'ni agar data source'da 50 tadan ko'p mos yozuv bo'lsa (masalan \U0001F4B0 Moliya bazasi
+    vaqt o'tishi bilan kattalashgan), qolganlari JIMGINA tashlab yuborilardi. Bu ayniqsa
+    filtrsiz (masalan _business_month_totals) yoki keng filtrli so'rovlarda real xatolikka
+    olib kelardi. Endi Notion'ning "has_more"/"next_cursor" mexanizmi orqali BARCHA
+    sahifalar yig'ib chiqiladi (haddan tashqari katta bazalarda cheksiz aylanmaslik uchun
+    xavfsizlik chegarasi — 50 marta so'rov, ya'ni page_size=100'da ~5000 yozuvgacha)."""
     url = f"{BASE_URL}/data_sources/{data_source_id}/query"
-    body: dict = {"page_size": page_size}
-    if filter_obj:
-        body["filter"] = filter_obj
-    resp = requests.post(url, headers=HEADERS, json=body, timeout=30)
-    resp.raise_for_status()
-    return resp.json().get("results", [])
+    results: list[dict] = []
+    start_cursor: str | None = None
+    for _ in range(50):
+        body: dict = {"page_size": min(page_size, 100)}
+        if filter_obj:
+            body["filter"] = filter_obj
+        if start_cursor:
+            body["start_cursor"] = start_cursor
+        resp = requests.post(url, headers=HEADERS, json=body, timeout=30)
+        resp.raise_for_status()
+        data = resp.json()
+        results.extend(data.get("results", []))
+        if data.get("has_more") and data.get("next_cursor"):
+            start_cursor = data["next_cursor"]
+        else:
+            break
+    return results
 
 
 def update_page_property(page_id: str, properties: dict) -> dict:
