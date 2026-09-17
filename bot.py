@@ -1578,9 +1578,22 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 "Izoh": {"rich_text": [{"text": {"content": "Admin orqali qayd etilgan to'lov"}}]},
             })
             try:
-                joriy_kredit = nx.get_number(employee, "Kredit") or 0
-                yangi_kredit = max(joriy_kredit - summa, 0)
-                nx.update_page_property(pending_payment, {"Kredit": {"number": yangi_kredit}})
+                # MUHIM: "Kunlik (oylik summadan)" turidagi xodimlar uchun Kredit bu yerda
+                # DARHOL kamaytirilmaydi — ularning joriy davr balansi (_do_moliya/_moliya_period_totals)
+                # allaqachon shu davrdagi barcha Chiqim yozuvlarini (shu jumladan aynan shu
+                # to'lovni) jonli hisoblab, kredit_hozir + kirim - chiqim formulasi bilan
+                # ko'rsatadi, va davr yakunida (scheduled_settlement_check) bu xuddi shu
+                # chiqim qiymati Kreditga QAYTADAN qo'shiladi/ayiriladi. Agar bu yerda ham
+                # kamaytirilsa — to'lov IKKI MARTA hisobga olinib, yakuniy Kredit noto'g'ri
+                # (kerakidan kam) chiqib qoladi. Faqat boshqa turdagi xodimlar uchun (ularda
+                # Kredit darhol, real vaqtda yangilanadi) shu yerda kamaytiriladi.
+                turi_check = nx.get_select(employee, "Maosh turi")
+                if turi_check == "Kunlik (oylik summadan)":
+                    yangi_kredit = None
+                else:
+                    joriy_kredit = nx.get_number(employee, "Kredit") or 0
+                    yangi_kredit = max(joriy_kredit - summa, 0)
+                    nx.update_page_property(pending_payment, {"Kredit": {"number": yangi_kredit}})
             except Exception:
                 logger.exception(f"{nomi} uchun to'lovdan keyin Kreditni yangilashda xatolik")
                 yangi_kredit = None
@@ -1623,9 +1636,16 @@ async def on_plain_text(update: Update, context: ContextTypes.DEFAULT_TYPE) -> N
                 "Izoh": {"rich_text": [{"text": {"content": "Avans (admin orqali)"}}]},
             })
             try:
-                joriy_kredit = nx.get_number(employee, "Kredit") or 0
-                yangi_kredit = max(joriy_kredit - summa, 0)
-                nx.update_page_property(pending_advance, {"Kredit": {"number": yangi_kredit}})
+                # Yuqoridagi to'lov blokidagi izohga qarang: "Kunlik (oylik summadan)" xodimlar
+                # uchun Kredit bu yerda darhol kamaytirilmaydi (davr yakunida avtomatik
+                # hisoblanadi) — aks holda ikki marta ayirilib qoladi.
+                turi_check = nx.get_select(employee, "Maosh turi")
+                if turi_check == "Kunlik (oylik summadan)":
+                    yangi_kredit = None
+                else:
+                    joriy_kredit = nx.get_number(employee, "Kredit") or 0
+                    yangi_kredit = max(joriy_kredit - summa, 0)
+                    nx.update_page_property(pending_advance, {"Kredit": {"number": yangi_kredit}})
             except Exception:
                 logger.exception(f"{nomi} uchun avansdan keyin Kreditni yangilashda xatolik")
                 yangi_kredit = None
