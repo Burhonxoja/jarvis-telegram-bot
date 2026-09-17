@@ -79,7 +79,7 @@ def _tashkent_now() -> datetime:
 def _tashkent_today() -> date:
     return _tashkent_now().date()
 
-from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, Update
+from telegram import BotCommand, InlineKeyboardButton, InlineKeyboardMarkup, MenuButtonWebApp, Update, WebAppInfo
 from telegram.constants import ParseMode
 from telegram.ext import (
     Application,
@@ -4082,6 +4082,19 @@ BOT_COMMANDS = [
 async def _post_init(app: Application) -> None:
     await app.bot.set_my_commands(BOT_COMMANDS)
     logger.info("Bot buyruqlar menyusi ('/') sozlandi.")
+
+    # Mini-app (Telegram Web App) — bot chatining pastki chap tugmasi orqali ochiladigan
+    # to'liq veb-interfeys (webapp.py, alohida Railway xizmati sifatida ishlaydi).
+    # MINIAPP_URL muhit o'zgaruvchisi sozlanmagan bo'lsa, oddiy "Menu" tugmasi qoladi.
+    miniapp_url = os.environ.get("MINIAPP_URL")
+    if miniapp_url:
+        try:
+            await app.bot.set_chat_menu_button(
+                menu_button=MenuButtonWebApp(text="Jarvis", web_app=WebAppInfo(url=miniapp_url))
+            )
+            logger.info(f"Mini-app menyu tugmasi sozlandi: {miniapp_url}")
+        except Exception:
+            logger.exception("Mini-app menyu tugmasini sozlashda xatolik")
 
 
 def main() -> None:
