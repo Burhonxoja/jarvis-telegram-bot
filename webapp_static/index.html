@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="uz">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, user-scalable=no">
+<title>Jarvis</title>
+<script src="https://telegram.org/js/telegram-web-app.js"></script>
+<style>
+  :root {
+    --bg: var(--tg-theme-bg-color, #0F172A);
+    --secondary-bg: var(--tg-theme-secondary-bg-color, #1E293B);
+    --text: var(--tg-theme-text-color, #F8FAFC);
+    --hint: var(--tg-theme-hint-color, #94A3B8);
+    --link: var(--tg-theme-link-color, #3B82F6);
+    --button: var(--tg-theme-button-color, #3B82F6);
+    --button-text: var(--tg-theme-button-text-color, #ffffff);
+    --card: var(--tg-theme-section-bg-color, #1E293B);
+    --green: #22C55E;
+    --red: #EF4444;
+    --yellow: #EAB308;
+  }
+  * { box-sizing: border-box; -webkit-tap-highlight-color: transparent; }
+  html, body { margin: 0; padding: 0; background: var(--bg); color: var(--text);
+    font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif; }
+  #app { padding: 12px 12px 84px 12px; min-height: 100vh; }
+  h1 { font-size: 19px; margin: 4px 0 14px; }
+  h2 { font-size: 15px; color: var(--hint); margin: 18px 0 8px; font-weight: 600; }
+  .card { background: var(--card); border-radius: 14px; padding: 14px; margin-bottom: 10px; }
+  .row { display: flex; justify-content: space-between; align-items: center; gap: 10px; }
+  .muted { color: var(--hint); font-size: 13px; }
+  .big { font-size: 22px; font-weight: 700; }
+  .pill { display: inline-block; padding: 3px 10px; border-radius: 999px; font-size: 12px; font-weight: 600; }
+  .pill.green { background: rgba(34,197,94,.18); color: var(--green); }
+  .pill.red { background: rgba(239,68,68,.18); color: var(--red); }
+  .pill.yellow { background: rgba(234,179,8,.18); color: var(--yellow); }
+  .pill.gray { background: rgba(148,163,184,.18); color: var(--hint); }
+  button { font-family: inherit; }
+  .btn { background: var(--button); color: var(--button-text); border: none; border-radius: 10px;
+    padding: 11px 14px; font-size: 14px; font-weight: 600; cursor: pointer; width: 100%; }
+  .btn.secondary { background: transparent; color: var(--button); border: 1.5px solid var(--button); }
+  .btn.small { width: auto; padding: 8px 12px; font-size: 13px; }
+  .btn:active { opacity: .8; }
+  .btn:disabled { opacity: .5; }
+  .proj-btn { display: block; width: 100%; text-align: left; background: var(--card); color: var(--text);
+    border: 1.5px solid transparent; border-radius: 12px; padding: 12px 14px; margin-bottom: 8px; font-size: 14px; }
+  .proj-btn.selected { border-color: var(--button); }
+  input[type=number], input[type=text] { width: 100%; padding: 12px 14px; border-radius: 10px; border: 1.5px solid var(--hint);
+    background: var(--bg); color: var(--text); font-size: 16px; margin-bottom: 10px; }
+  .tabbar { position: fixed; bottom: 0; left: 0; right: 0; display: flex; background: var(--secondary-bg);
+    border-top: 1px solid rgba(148,163,184,.2); padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); }
+  .tab { flex: 1; text-align: center; padding: 6px 2px; color: var(--hint); font-size: 11px; }
+  .tab.active { color: var(--link); }
+  .tab .icon { font-size: 20px; display: block; }
+  .empty { text-align: center; color: var(--hint); padding: 30px 10px; }
+  .overlay { position: fixed; inset: 0; background: rgba(0,0,0,.55); display: flex; align-items: flex-end;
+    justify-content: center; z-index: 50; }
+  .sheet { background: var(--secondary-bg); width: 100%; max-width: 480px; border-radius: 18px 18px 0 0;
+    padding: 18px 16px calc(18px + env(safe-area-inset-bottom)); }
+  .sheet h3 { margin: 0 0 12px; font-size: 16px; }
+  .sheet-actions { display: flex; gap: 8px; margin-top: 6px; }
+  .spinner { text-align: center; padding: 30px; color: var(--hint); }
+  .toast { position: fixed; top: 14px; left: 50%; transform: translateX(-50%); background: var(--card);
+    color: var(--text); padding: 10px 16px; border-radius: 10px; font-size: 13px; z-index: 100; max-width: 90%;
+    box-shadow: 0 4px 16px rgba(0,0,0,.3); }
+</style>
+</head>
+<body>
+<div id="app"><div class="spinner">Yuklanmoqda…</div></div>
+<div class="tabbar" id="tabbar" style="display:none">
+  <div class="tab" data-tab="dashboard"><span class="icon">🏠</span>Bosh sahifa</div>
+  <div class="tab" data-tab="kirim"><span class="icon">➕</span>Kirim</div>
+  <div class="tab" data-tab="loyihalar"><span class="icon">📁</span>Loyihalar</div>
+  <div class="tab" data-tab="xodimlar"><span class="icon">👥</span>Xodimlar</div>
+</div>
+
+<script>
+const tg = window.Telegram && window.Telegram.WebApp;
+if (tg) { tg.ready(); tg.expand(); }
+const initData = tg ? tg.initData : "";
+
+const app = document.getElementById("app");
+const tabbar = document.getElementById("tabbar");
+let currentTab = "dashboard";
+let kirimState = { projectId: null, projectName: null, debit: 0 };
+
+function fmtSom(n) {
+  n = Math.round(n || 0);
+  return n.toString().replace(/\B(?=(\d{3})+(?!\d))/g, " ") + " so'm";
+}
+
+function toast(msg) {
+  const el = document.createElement("div");
+  el.className = "toast";
+  el.textContent = msg;
+  document.body.appendChild(el);
+  setTimeout(() => el.remove(), 3200);
+}
+
+async function api(path, opts) {
+  opts = opts || {};
+  opts.headers = Object.assign({
+    "Authorization": "tma " + initData,
+    "Content-Type": "application/json",
+  }, opts.headers || {});
+  const resp = await fetch(path, opts);
+  if (!resp.ok) {
+    let detail = "Xatolik";
+    try { detail = (await resp.json()).detail || detail; } catch (e) {}
+    throw new Error(detail);
+  }
+  return resp.json();
+}
+
+function setTab(tab) {
+  currentTab = tab;
+  document.querySelectorAll(".tab").forEach(t => t.classList.toggle("active", t.dataset.tab === tab));
+  if (tab === "dashboard") renderDashboard();
+  else if (tab === "kirim") renderKirim();
+  else if (tab === "loyihalar") renderLoyihalar();
+  else if (tab === "xodimlar") renderXodimlar();
+}
+
+document.getElementById("tabbar").addEventListener("click", (e) => {
+  const t = e.target.closest(".tab");
+  if (t) setTab(t.dataset.tab);
+});
+
+// ---------------- Bosh sahifa ----------------
+async function renderDashboard() {
+  app.innerHTML = '<div class="spinner">Yuklanmoqda…</div>';
+  try {
+    const d = await api("/api/dashboard");
+    let debitHtml = "";
+    if (d.debit_qarzdorlar.length) {
+      debitHtml = d.debit_qarzdorlar.map(x => `
+        <div class="row card" style="margin-bottom:6px;padding:10px 14px;">
+          <div>${x.nomi}</div>
+          <div class="row" style="gap:8px;">
+            <b>${fmtSom(x.summa)}</b>
+            <button class="btn small" onclick="goKirimFor('${x.id}','${x.nomi.replace(/'/g,"\\'")}',${x.summa})">➕</button>
+          </div>
+        </div>`).join("");
+    } else {
+      debitHtml = '<div class="muted">Qarzdorlar yo\'q 🎉</div>';
+    }
+    app.innerHTML = `
+      <h1>💼 Biznes — ${d.month}</h1>
+      <div class="card">
+        <div class="row"><span class="muted">Kirim</span><b>${d.format.biz_kirim}</b></div>
+        <div class="row" style="margin-top:8px"><span class="muted">Chiqim</span><b>${d.format.biz_chiqim}</b></div>
+        <div class="row" style="margin-top:8px"><span class="muted">Sof foyda</span>
+          <span class="big" style="color:${d.foyda >= 0 ? 'var(--green)' : 'var(--red)'}">${d.format.foyda}</span></div>
+      </div>
+      <h2>💳 Mandan qarzdorlar (Debit) — jami ${d.format.jami_debit}</h2>
+      ${debitHtml}
+      <h2>💰 Xodimlarga qarzimiz (Kredit) — jami ${d.format.jami_kredit}</h2>
+      <div class="card"><button class="btn secondary" onclick="setTab('xodimlar')">Xodimlarni ko'rish</button></div>
+    `;
+  } catch (e) {
+    app.innerHTML = `<div class="empty">⚠️ ${e.message}</div>`;
+  }
+}
+
+window.goKirimFor = function(id, nomi, debit) {
+  kirimState = { projectId: id, projectName: nomi, debit: debit };
+  setTab("kirim");
+};
+
+// ---------------- Kirim qo'shish ----------------
+async function renderKirim() {
+  app.innerHTML = '<div class="spinner">Yuklanmoqda…</div>';
+  try {
+    const d = await api("/api/loyihalar?holati=Faol");
+    const projList = d.loyihalar;
+    if (!kirimState.projectId) {
+      kirimState = { projectId: null, projectName: null, debit: 0 };
+    }
+    let projHtml = projList.map(p => `
+      <button class="proj-btn ${kirimState.projectId === p.id ? 'selected' : ''}" onclick="selectKirimProj('${p.id}','${p.nomi.replace(/'/g,"\\'")}',${p.debit})">
+        <div class="row"><span>📁 ${p.nomi}</span>${p.debit ? `<span class="muted">qarz: ${fmtSom(p.debit)}</span>` : ""}</div>
+      </button>`).join("");
+    projHtml += `
+      <button class="proj-btn ${kirimState.projectId === 'none' ? 'selected' : ''}" onclick="selectKirimProj('none','Boshqa',0)">
+        🗂 Boshqa (loyihasiz)
+      </button>`;
+
+    let debitToggle = "";
+    if (kirimState.projectId && kirimState.projectId !== "none" && kirimState.debit > 0) {
+      debitToggle = `
+        <div class="card">
+          <div class="muted" style="margin-bottom:8px">Bu pul joriy Debitdan (${fmtSom(kirimState.debit)}) ayirilsinmi?</div>
+          <div class="sheet-actions">
+            <button class="btn ${kirimState.debitAyirish === true ? '' : 'secondary'}" onclick="setDebitAyirish(true)">✅ Ha</button>
+            <button class="btn ${kirimState.debitAyirish === false ? '' : 'secondary'}" onclick="setDebitAyirish(false)">❌ Yo'q</button>
+          </div>
+        </div>`;
+    }
+
+    app.innerHTML = `
+      <h1>➕ Kirim qo'shish</h1>
+      <h2>1. Loyihani tanlang</h2>
+      ${projHtml}
+      ${kirimState.projectId ? `
+        ${debitToggle}
+        <h2>2. Summani kiriting</h2>
+        <div class="card">
+          <input type="number" id="kirimSumma" placeholder="masalan: 2000000" inputmode="numeric">
+          <button class="btn" onclick="submitKirim()">✅ Kirim qo'shish</button>
+        </div>` : ""}
+    `;
+  } catch (e) {
+    app.innerHTML = `<div class="empty">⚠️ ${e.message}</div>`;
+  }
+}
+
+window.selectKirimProj = function(id, nomi, debit) {
+  kirimState = { projectId: id, projectName: nomi, debit: debit, debitAyirish: null };
+  renderKirim();
+};
+window.setDebitAyirish = function(val) {
+  kirimState.debitAyirish = val;
+  renderKirim();
+};
+window.submitKirim = async function() {
+  const val = parseFloat(document.getElementById("kirimSumma").value);
+  if (!val || val <= 0) { toast("Summani to'g'ri kiriting"); return; }
+  if (kirimState.projectId !== "none" && kirimState.debit > 0 && kirimState.debitAyirish === null) {
+    toast("Iltimos, Debit haqida savolga javob bering");
+    return;
+  }
+  try {
+    const res = await api("/api/kirim", {
+      method: "POST",
+      body: JSON.stringify({
+        project_id: kirimState.projectId,
+        summa: val,
+        debit_ayirish: kirimState.debitAyirish || false,
+      }),
+    });
+    toast(res.message);
+    if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
+    kirimState = { projectId: null, projectName: null, debit: 0 };
+    setTab("dashboard");
+  } catch (e) {
+    toast("⚠️ " + e.message);
+  }
+};
+
+// ---------------- Loyihalar ----------------
+let loyihalarFilter = "Faol";
+async function renderLoyihalar() {
+  app.innerHTML = '<div class="spinner">Yuklanmoqda…</div>';
+  try {
+    const d = await api("/api/loyihalar?holati=" + encodeURIComponent(loyihalarFilter));
+    const filters = ["Faol", "Pauzada", "Arxivlangan", "Hammasi"];
+    const filterHtml = filters.map(f => `
+      <button class="btn small ${f === loyihalarFilter ? '' : 'secondary'}" style="margin:0 6px 8px 0"
+        onclick="setLoyihaFilter('${f}')">${f}</button>`).join("");
+
+    const pillClass = { "Faol": "green", "Pauzada": "yellow", "Arxivlangan": "gray" };
+    let cards = d.loyihalar.map(p => `
+      <div class="card">
+        <div class="row"><b>${p.nomi}</b><span class="pill ${pillClass[p.holati] || 'gray'}">${p.holati || "?"}</span></div>
+        <div class="muted" style="margin-top:6px">${p.loyiha_turi || ""} ${p.tolov_turi ? "· " + p.tolov_turi : ""}</div>
+        ${p.tolov_summasi ? `<div class="muted">To'lov: ${fmtSom(p.tolov_summasi)}</div>` : ""}
+        ${p.debit ? `<div class="row" style="margin-top:8px"><span class="muted">💳 Debit</span><b style="color:var(--red)">${fmtSom(p.debit)}</b></div>` : ""}
+        <button class="btn secondary" style="margin-top:10px" onclick="goKirimFor('${p.id}','${p.nomi.replace(/'/g,"\\'")}',${p.debit})">➕ Kirim qo'shish</button>
+      </div>`).join("");
+    if (!d.loyihalar.length) cards = '<div class="empty">Loyiha topilmadi</div>';
+
+    app.innerHTML = `<h1>📁 Loyihalar</h1><div>${filterHtml}</div>${cards}`;
+  } catch (e) {
+    app.innerHTML = `<div class="empty">⚠️ ${e.message}</div>`;
+  }
+}
+window.setLoyihaFilter = function(f) { loyihalarFilter = f; renderLoyihalar(); };
+
+// ---------------- Xodimlar ----------------
+async function renderXodimlar() {
+  app.innerHTML = '<div class="spinner">Yuklanmoqda…</div>';
+  try {
+    const d = await api("/api/xodimlar");
+    let cards = d.xodimlar.map(e => `
+      <div class="card">
+        <div class="row"><b>👤 ${e.nomi}</b><span class="big" style="font-size:16px">${fmtSom(e.balans)}</span></div>
+        <div class="muted" style="margin-top:4px">${e.lavozim || ""} · ${e.maosh_turi || ""}</div>
+        <div class="muted" style="margin-top:6px">
+          Kredit: ${fmtSom(e.kredit_hozir)} · Joriy davr (${e.davr_boshi.slice(5)} – ${e.davr_oxiri.slice(5)}) jamg'armasi: ${fmtSom(e.davr_kirim)}
+          ${e.davr_chiqim ? " · to'langan: " + fmtSom(e.davr_chiqim) : ""}
+        </div>
+        <div class="sheet-actions" style="margin-top:10px">
+          <button class="btn" onclick="openPayModal('${e.id}','${e.nomi.replace(/'/g,"\\'")}','payment')">💵 To'lov</button>
+          <button class="btn secondary" onclick="openPayModal('${e.id}','${e.nomi.replace(/'/g,"\\'")}','advance')">🪙 Avans</button>
+        </div>
+      </div>`).join("");
+    if (!d.xodimlar.length) cards = '<div class="empty">Xodim topilmadi</div>';
+    app.innerHTML = `<h1>👥 Xodimlar</h1>${cards}`;
+  } catch (e) {
+    app.innerHTML = `<div class="empty">⚠️ ${e.message}</div>`;
+  }
+}
+
+window.openPayModal = function(id, nomi, kind) {
+  const overlay = document.createElement("div");
+  overlay.className = "overlay";
+  overlay.innerHTML = `
+    <div class="sheet">
+      <h3>${kind === "payment" ? "💵" : "🪙"} ${nomi}ga ${kind === "payment" ? "to'lov" : "avans"}</h3>
+      <input type="number" id="paySumma" placeholder="masalan: 1000000" inputmode="numeric">
+      <div class="sheet-actions">
+        <button class="btn secondary" id="payCancel">Bekor qilish</button>
+        <button class="btn" id="payConfirm">Tasdiqlash</button>
+      </div>
+    </div>`;
+  document.body.appendChild(overlay);
+  overlay.addEventListener("click", (e) => { if (e.target === overlay) overlay.remove(); });
+  overlay.querySelector("#payCancel").onclick = () => overlay.remove();
+  overlay.querySelector("#payConfirm").onclick = async () => {
+    const val = parseFloat(overlay.querySelector("#paySumma").value);
+    if (!val || val <= 0) { toast("Summani to'g'ri kiriting"); return; }
+    try {
+      const endpoint = kind === "payment" ? "/api/xodim/payment" : "/api/xodim/advance";
+      const res = await api(endpoint, { method: "POST", body: JSON.stringify({ employee_id: id, summa: val }) });
+      toast(res.message);
+      if (tg && tg.HapticFeedback) tg.HapticFeedback.notificationOccurred("success");
+      overlay.remove();
+      renderXodimlar();
+    } catch (e) {
+      toast("⚠️ " + e.message);
+    }
+  };
+};
+
+// ---------------- Boshlash ----------------
+(async function init() {
+  if (!initData) {
+    app.innerHTML = '<div class="empty">⚠️ Bu ilova faqat Telegram ichida ochiladi.</div>';
+    return;
+  }
+  tabbar.style.display = "flex";
+  document.querySelector('.tab[data-tab="dashboard"]').classList.add("active");
+  try {
+    await renderDashboard();
+  } catch (e) {
+    app.innerHTML = `<div class="empty">⚠️ ${e.message}</div>`;
+  }
+})();
+</script>
+</body>
+</html>
