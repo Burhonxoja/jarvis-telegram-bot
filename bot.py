@@ -2624,8 +2624,12 @@ async def _do_moliya(bot, chat_id) -> None:
                 e_turi = nx.get_select(e, "Maosh turi")
                 e_kredit = nx.get_number(e, "Kredit") or 0
                 if e_turi == "Kunlik (oylik summadan)":
-                    e_kirim, _, _, _ = _moliya_period_totals(e)
-                    e_kredit += e_kirim
+                    # MUHIM: pastdagi har bir xodim uchun balans qatoridagi formula bilan bir xil
+                    # bo'lishi shart — "chiqim" (shu davrda qilingan to'lov/avans) ayirilmasa,
+                    # umumiy Kredit summasi allaqachon to'langan pulni HALI QARZ deb ko'rsatib,
+                    # noto'g'ri (haddan tashqari katta) chiqib qoladi.
+                    e_kirim, e_chiqim, _, _ = _moliya_period_totals(e)
+                    e_kredit += e_kirim - e_chiqim
                 jami_kredit += e_kredit
         except Exception:
             logger.exception("Xodimlar Kreditini yig'ishda xatolik")
